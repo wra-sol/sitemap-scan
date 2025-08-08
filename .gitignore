@@ -1,0 +1,15 @@
+# Dependencies
+/node_modules
+
+# Bun
+.bun-lockb
+
+# Build artifacts
+/dist
+
+# Local data / secrets
+last_sitemap.json
+.env
+.env.*
+!.env.example
+

@@ -1,0 +1,24 @@
+{
+  "name": "sitemap-scan",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "sitemap-checker.ts",
+  "scripts": {
+    "start": "bun run sitemap-checker.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Recursively scan a sitemap and POST links updated today to an endpoint.",
+  "dependencies": {
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/xml2js": "^0.4.14",
+    "bun-types": "^1.0.15",
+    "typescript": "^5.5.4"
+  }
+}
