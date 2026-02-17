@@ -1,0 +1,150 @@
+[
+  {
+    "id": "example-com",
+    "name": "Example.com Production",
+    "baseUrl": "https://example.com",
+    "sitemapUrl": "https://example.com/sitemap.xml",
+    "retentionDays": 7,
+    "schedule": "0 2 * * *",
+    "slackWebhook": "https://hooks.slack.com/services/YOUR/PRODUCTION/WEBHOOK",
+    "fetchOptions": {
+      "timeout": 10000,
+      "retries": 3,
+      "concurrency": 5
+    },
+    "changeThreshold": {
+      "minChangeSize": 50,
+      "ignorePatterns": [
+        "\\b\\d{4}-\\d{2}-\\d{2}\\b",
+        "\\b\\d{2}:\\d{2}:\\d{2}\\b",
+        "timestamp",
+        "csrf-token",
+        "nonce"
+      ]
+    }
+  },
+  {
+    "id": "my-blog",
+    "name": "My Personal Blog",
+    "baseUrl": "https://myblog.com",
+    "urls": [
+      "https://myblog.com/",
+      "https://myblog.com/about",
+      "https://myblog.com/contact",
+      "https://myblog.com/posts",
+      "https://myblog.com/categories/tech"
+    ],
+    "retentionDays": 14,
+    "schedule": "0 4 * * *",
+    "fetchOptions": {
+      "timeout": 15000,
+      "retries": 2,
+      "concurrency": 3
+    },
+    "changeThreshold": {
+      "minChangeSize": 0,
+      "ignorePatterns": [
+        "data-testid",
+        "data-cy",
+        "\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b"
+      ]
+    }
+  },
+  {
+    "id": "company-website",
+    "name": "Company Corporate Site",
+    "baseUrl": "https://company.com",
+    "sitemapUrl": "https://company.com/sitemap-index.xml",
+    "retentionDays": 30,
+    "schedule": "0 1 * * *",
+    "slackWebhook": "https://hooks.slack.com/services/YOUR/CORPORATE/WEBHOOK",
+    "fetchOptions": {
+      "timeout": 12000,
+      "retries": 3,
+      "concurrency": 8
+    },
+    "changeThreshold": {
+      "minChangeSize": 100,
+      "ignorePatterns": [
+        "build-number",
+        "version",
+        "_requestId",
+        "session-id"
+      ]
+    }
+  },
+  {
+    "id": "api-documentation",
+    "name": "API Documentation Site",
+    "baseUrl": "https://docs.example.com",
+    "sitemapUrl": "https://docs.example.com/sitemap.xml",
+    "retentionDays": 7,
+    "schedule": "0 3 * * 1,3,5",
+    "fetchOptions": {
+      "timeout": 20000,
+      "retries": 4,
+      "concurrency": 6
+    },
+    "changeThreshold": {
+      "minChangeSize": 25,
+      "ignorePatterns": [
+        "last-modified",
+        "generated-at",
+        "\\bv?\\d+\\.\\d+\\.\\d+\\b"
+      ]
+    }
+  },
+  {
+    "id": "e-commerce-store",
+    "name": "E-commerce Storefront",
+    "baseUrl": "https://shop.example.com",
+    "urls": [
+      "https://shop.example.com/",
+      "https://shop.example.com/products",
+      "https://shop.example.com/categories",
+      "https://shop.example.com/about",
+      "https://shop.example.com/contact",
+      "https://shop.example.com/faq",
+      "https://shop.example.com/privacy",
+      "https://shop.example.com/terms"
+    ],
+    "retentionDays": 3,
+    "schedule": "0 5 * * *",
+    "fetchOptions": {
+      "timeout": 8000,
+      "retries": 2,
+      "concurrency": 4
+    },
+    "changeThreshold": {
+      "minChangeSize": 200,
+      "ignorePatterns": [
+        "product-count",
+        "price-update",
+        "session-token",
+        "cart-id"
+      ]
+    }
+  },
+  {
+    "id": "news-portal",
+    "name": "News Portal",
+    "baseUrl": "https://news.example.com",
+    "sitemapUrl": "https://news.example.com/sitemap.xml",
+    "retentionDays": 1,
+    "schedule": "*/30 * * * *",
+    "fetchOptions": {
+      "timeout": 6000,
+      "retries": 1,
+      "concurrency": 10
+    },
+    "changeThreshold": {
+      "minChangeSize": 10,
+      "ignorePatterns": [
+        "article-timestamp",
+        "breaking-news-banner",
+        "live-counter",
+        "\\b\\d{1,2}:\\d{2}\\s*(AM|PM)\\b"
+      ]
+    }
+  }
+]

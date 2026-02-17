@@ -1,0 +1,65 @@
+name = "multi-site-backup"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+account_id = "ad5ec479b9a421faa2ed06c3d1c2b23a"
+
+
+
+[[kv_namespaces]]
+binding = "BACKUP_KV"
+id = "144d4b0e20d1499eaa2b661ff97b0f61"
+preview_id = "120d66d759584824bb1ed3b8bc1116c7"
+
+[vars]
+# Default configuration values
+DEFAULT_RETENTION_DAYS = "7"
+MAX_GLOBAL_CONCURRENT = "50"
+MAX_RETRY_ATTEMPTS = "3"
+DEFAULT_TIMEOUT = "10000"
+#
+# Public URL for this Worker (used in Slack links)
+# Example: "https://your-worker.your-subdomain.workers.dev"
+PUBLIC_BASE_URL =  "https://multi-site-backup.chester-hill-solutions.workers.dev"
+
+# Secrets to be set via wrangler CLI:
+# wrangler secret put DEFAULT_SLACK_WEBHOOK
+# DEFAULT_SLACK_WEBHOOK = "<set via: wrangler secret put DEFAULT_SLACK_WEBHOOK>"
+
+
+
+# Optional: D1 Database for enhanced analytics (uncomment if needed)
+# [[d1_databases]]
+# binding = "BACKUP_DB"
+# database_name = "backup-analytics"
+# database_id = "your-d1-database-id-here"
+
+# Optional: Durable Objects for real-time monitoring (uncomment if needed)
+# [[durable_objects.bindings]]
+# name = "BACKUP_MONITOR"
+# class_name = "BackupMonitor"
+
+# Optional: R2 bucket for large file storage (uncomment if needed)
+# [[r2_buckets]]
+# binding = "BACKUP_STORAGE"
+# bucket_name = "backup-storage-bucket"
+
+# Analytics Engine for detailed monitoring (optional)
+# [analytics_engine_datasets]
+# binding = "BACKUP_ANALYTICS"
+# dataset = "backup_metrics"
+
+# Workers AI integration for content analysis (optional)
+# [ai]
+# binding = "BACKUP_AI"
+
+# Queue for async processing (optional)
+# [[queues.producers]]
+# binding = "BACKUP_QUEUE"
+# queue = "backup-jobs"
+
+# Cron trigger
+# Runs every 10 minutes to allow batched sites to complete within a day.
+# The worker will skip re-running sites that already completed today unless their sitemap changed.
+[triggers]
+crons = ["*/10 * * * *"]

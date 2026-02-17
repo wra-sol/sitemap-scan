@@ -1,24 +1,28 @@
 {
-  "name": "sitemap-scan",
+  "name": "multi-site-backup",
   "version": "1.0.0",
-  "type": "module",
-  "main": "sitemap-checker.ts",
+  "description": "Multi-site backup utility for Cloudflare Workers with KV storage and Slack notifications",
+  "main": "src/index.ts",
   "scripts": {
-    "start": "bun run sitemap-checker.ts",
-    "typecheck": "tsc --noEmit",
-    "test": "echo \"No tests yet\" && exit 0"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "Recursively scan a sitemap and POST links updated today to an endpoint.",
-  "dependencies": {
-    "xml2js": "^0.6.2"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc --noEmit",
+    "lint": "eslint src/**/*.ts",
+    "test": "vitest"
   },
   "devDependencies": {
-    "@types/node": "^20.12.12",
-    "@types/xml2js": "^0.4.14",
-    "bun-types": "^1.0.15",
-    "typescript": "^5.5.4"
+    "@cloudflare/workers-types": "^4.20240115.0",
+    "@types/html-minifier-terser": "^7.0.2",
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.53.0",
+    "@typescript-eslint/parser": "^8.53.0",
+    "eslint": "^8.55.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0",
+    "wrangler": "^3.28.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.3.2",
+    "html-minifier-terser": "^7.2.0"
   }
 }

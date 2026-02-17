@@ -9,7 +9,11 @@
 
 # Local data / secrets
 last_sitemap.json
+.DS_Store
+downloads/
 .env
 .env.*
 !.env.example
+.wrangler
 
+.wrangler/

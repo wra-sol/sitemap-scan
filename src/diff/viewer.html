@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diff Viewer - Website Backup Monitor</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .header {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      margin-bottom: 10px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+
+    .control-group {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    button, select {
+      padding: 8px 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    button:hover, select:hover {
+      background: #f0f0f0;
+    }
+
+    button.active {
+      background: #0066cc;
+      color: white;
+      border-color: #0066cc;
+    }
+
+    .summary {
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 15px;
+    }
+
+    .summary-item {
+      text-align: center;
+    }
+
+    .summary-item .value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #0066cc;
+    }
+
+    .summary-item .label {
+      font-size: 12px;
+      color: #666;
+      margin-top: 5px;
+    }
+
+    .diff-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+
+    .panel {
+      padding: 15px;
+      overflow: auto;
+    }
+
+    .panel-header {
+      font-weight: bold;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .changes-list {
+      list-style: none;
+    }
+
+    .change-item {
+      padding: 10px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      border-left: 3px solid transparent;
+    }
+
+    .change-item.content {
+      background: #f0f9ff;
+      border-left-color: #0066cc;
+    }
+
+    .change-item.style {
+      background: #fff7ed;
+      border-left-color: #f97316;
+    }
+
+    .change-item.structure {
+      background: #f0fdf4;
+      border-left-color: #22c55e;
+    }
+
+    .change-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+    }
+
+    .change-type {
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: bold;
+    }
+
+    .change-type.added {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .change-type.removed {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .change-type.modified {
+      background: #fef9c3;
+      color: #854d0e;
+    }
+
+    .change-content {
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .change-content .before {
+      color: #991b1b;
+      text-decoration: line-through;
+    }
+
+    .change-content .after {
+      color: #166534;
+    }
+
+    .change-context {
+      font-size: 11px;
+      color: #666;
+      margin-top: 5px;
+      font-style: italic;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #999;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+    }
+
+    .error {
+      background: #fee2e2;
+      color: #991b1b;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .sidebar {
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+
+    .url-list {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .url-item {
+      padding: 8px;
+      cursor: pointer;
+      border-radius: 4px;
+      margin-bottom: 5px;
+      font-size: 13px;
+      word-break: break-all;
+    }
+
+    .url-item:hover {
+      background: #f0f0f0;
+    }
+
+    .url-item.selected {
+      background: #0066cc;
+      color: white;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 11px;
+      margin-left: 5px;
+    }
+
+    .badge-content {
+      background: #0066cc;
+      color: white;
+    }
+
+    .badge-style {
+      background: #f97316;
+      color: white;
+    }
+
+    .badge-structure {
+      background: #22c55e;
+      color: white;
+    }
+
+    @media (max-width: 768px) {
+      .diff-container {
+        grid-template-columns: 1fr;
+      }
+
+      .controls {
+        flex-direction: column;
+      }
+
+      .control-group {
+        flex-wrap: wrap;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 id="pageTitle">Diff Viewer</h1>
+      <div id="pageInfo"></div>
+    </div>
+
+    <div class="controls">
+      <div class="control-group">
+        <select id="siteSelect">
+          <option value="">Select Site...</option>
+        </select>
+        <select id="dateSelect">
+          <option value="">Select Date...</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <button id="viewAll" class="active">All Changes</button>
+        <button id="viewContent">Content</button>
+        <button id="viewStyle">Style</button>
+        <button id="viewStructure">Structure</button>
+      </div>
+      <div class="control-group">
+        <button id="compareSideBySide" class="active">Side by Side</button>
+        <button id="compareUnified">Unified</button>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <h3>Changed URLs</h3>
+      <div class="url-list" id="urlList">
+        <div class="empty-state">Select a site and date to view changes</div>
+      </div>
+    </div>
+
+    <div class="summary" id="summary" style="display: none;">
+      <div class="summary-item">
+        <div class="value" id="totalChanges">0</div>
+        <div class="label">Total Changes</div>
+      </div>
+      <div class="summary-item">
+        <div class="value" id="contentChanges">0</div>
+        <div class="label">Content Changes</div>
+      </div>
+      <div class="summary-item">
+        <div class="value" id="styleChanges">0</div>
+        <div class="label">Style Changes</div>
+      </div>
+      <div class="summary-item">
+        <div class="value" id="structureChanges">0</div>
+        <div class="label">Structure Changes</div>
+      </div>
+    </div>
+
+    <div class="diff-container" id="diffContainer" style="display: none;">
+      <div class="panel" id="leftPanel">
+        <div class="panel-header">Previous Version</div>
+        <div id="leftContent"></div>
+      </div>
+      <div class="panel" id="rightPanel">
+        <div class="panel-header">Current Version</div>
+        <div id="rightContent"></div>
+      </div>
+    </div>
+
+    <div id="loading" class="loading" style="display: none;">
+      Loading...
+    </div>
+
+    <div id="error" class="error" style="display: none;"></div>
+  </div>
+
+  <script>
+    let currentDiff = null;
+    let currentView = 'all';
+    let currentCompareMode = 'side-by-side';
+
+    const baseUrl = window.location.origin;
+
+    document.getElementById('viewAll').addEventListener('click', () => setView('all'));
+    document.getElementById('viewContent').addEventListener('click', () => setView('content'));
+    document.getElementById('viewStyle').addEventListener('click', () => setView('style'));
+    document.getElementById('viewStructure').addEventListener('click', () => setView('structure'));
+
+    document.getElementById('compareSideBySide').addEventListener('click', () => setCompareMode('side-by-side'));
+    document.getElementById('compareUnified').addEventListener('click', () => setCompareMode('unified'));
+
+    document.getElementById('siteSelect').addEventListener('change', loadDates);
+    document.getElementById('dateSelect').addEventListener('change', loadDiff);
+
+    async function loadSites() {
+      try {
+        const response = await fetch(`${baseUrl}/api/sites`);
+        const sites = await response.json();
+
+        const select = document.getElementById('siteSelect');
+        select.innerHTML = '<option value="">Select Site...</option>';
+
+        for (const site of sites) {
+          const option = document.createElement('option');
+          option.value = site.id;
+          option.textContent = site.name;
+          select.appendChild(option);
+        }
+      } catch (error) {
+        showError('Failed to load sites: ' + error.message);
+      }
+    }
+
+    async function loadDates() {
+      const siteId = document.getElementById('siteSelect').value;
+      if (!siteId) return;
+
+      try {
+        const response = await fetch(`${baseUrl}/api/sites/${siteId}/dates`);
+        const dates = await response.json();
+
+        const select = document.getElementById('dateSelect');
+        select.innerHTML = '<option value="">Select Date...</option>';
+
+        for (const date of dates) {
+          const option = document.createElement('option');
+          option.value = date;
+          option.textContent = date;
+          select.appendChild(option);
+        }
+      } catch (error) {
+        showError('Failed to load dates: ' + error.message);
+      }
+    }
+
+    async function loadDiff() {
+      const siteId = document.getElementById('siteSelect').value;
+      const date = document.getElementById('dateSelect').value;
+
+      if (!siteId || !date) return;
+
+      showLoading(true);
+
+      try {
+        const response = await fetch(`${baseUrl}/api/sites/${siteId}/diff/${date}`);
+        if (!response.ok) throw new Error('Failed to load diff');
+
+        currentDiff = await response.json();
+        renderUrlList();
+        renderSummary();
+
+        if (currentDiff.urls.length > 0) {
+          await selectUrl(currentDiff.urls[0].url);
+        } else {
+          document.getElementById('leftContent').innerHTML = '<div class="empty-state">No changes detected</div>';
+          document.getElementById('rightContent').innerHTML = '<div class="empty-state">No changes detected</div>';
+        }
+
+        document.getElementById('summary').style.display = 'grid';
+        document.getElementById('diffContainer').style.display = 'grid';
+      } catch (error) {
+        showError('Failed to load diff: ' + error.message);
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    async function selectUrl(url) {
+      if (!currentDiff) return;
+
+      const urlHash = await hashUrl(url);
+      showLoading(true);
+
+      try {
+        const siteId = document.getElementById('siteSelect').value;
+        const date = document.getElementById('dateSelect').value;
+
+        const response = await fetch(`${baseUrl}/api/sites/${siteId}/diff/${date}/url/${urlHash}`);
+        if (!response.ok) throw new Error('Failed to load URL diff');
+
+        const urlDiff = await response.json();
+        renderUrlDiff(urlDiff);
+      } catch (error) {
+        showError('Failed to load URL diff: ' + error.message);
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    function renderUrlList() {
+      const container = document.getElementById('urlList');
+      container.innerHTML = '';
+
+      for (const urlData of currentDiff.urls) {
+        const div = document.createElement('div');
+        div.className = 'url-item';
+        div.innerHTML = `
+          <div>${escapeHtml(urlData.url)}</div>
+          <div>
+            ${urlData.contentChanges > 0 ? `<span class="badge badge-content">${urlData.contentChanges} content</span>` : ''}
+            ${urlData.styleChanges > 0 ? `<span class="badge badge-style">${urlData.styleChanges} style</span>` : ''}
+            ${urlData.structureChanges > 0 ? `<span class="badge badge-structure">${urlData.structureChanges} structure</span>` : ''}
+          </div>
+        `;
+        div.addEventListener('click', () => {
+          document.querySelectorAll('.url-item').forEach(el => el.classList.remove('selected'));
+          div.classList.add('selected');
+          selectUrl(urlData.url);
+        });
+        container.appendChild(div);
+      }
+
+      if (container.firstChild) {
+        container.firstChild.classList.add('selected');
+      }
+    }
+
+    function renderUrlDiff(urlDiff) {
+      const classification = urlDiff.classification;
+
+      const filteredChanges = getFilteredChanges(classification);
+
+      document.getElementById('leftContent').innerHTML = renderChanges(filteredChanges, 'left');
+      document.getElementById('rightContent').innerHTML = renderChanges(filteredChanges, 'right');
+
+      document.getElementById('pageTitle').textContent = 'Diff Viewer - ' + urlDiff.url;
+      document.getElementById('pageInfo').textContent = `Date: ${urlDiff.date} | Generated: ${new Date(urlDiff.metadata.generatedAt).toLocaleString()}`;
+    }
+
+    function getFilteredChanges(classification) {
+      if (currentView === 'all') {
+        return classification;
+      }
+
+      return {
+        content: currentView === 'content' ? classification.content : [],
+        style: currentView === 'style' ? classification.style : [],
+        structure: currentView === 'structure' ? classification.structure : []
+      };
+    }
+
+    function renderChanges(classification, side) {
+      const changes = [
+        ...classification.content.map(c => ({ ...c, category: 'content' })),
+        ...classification.style.map(c => ({ ...c, category: 'style' })),
+        ...classification.structure.map(c => ({ ...c, category: 'structure' }))
+      ];
+
+      if (changes.length === 0) {
+        return '<div class="empty-state">No changes in this category</div>';
+      }
+
+      const html = changes.map(change => `
+        <div class="change-item ${change.category}">
+          <div class="change-header">
+            <span class="change-type ${change.change}">${change.change}</span>
+            <strong>${change.element}</strong>
+          </div>
+          <div class="change-content">
+            ${change.before ? `<div class="before">${escapeHtml(change.before)}</div>` : ''}
+            ${change.after ? `<div class="after">${escapeHtml(change.after)}</div>` : ''}
+          </div>
+          ${change.context ? `<div class="change-context">${escapeHtml(change.context)}</div>` : ''}
+          ${change.position ? `<div style="font-size: 11px; color: #999;">Line ${change.position.line}, Column ${change.position.column}</div>` : ''}
+        </div>
+      `).join('');
+
+      return `<ul class="changes-list">${html}</ul>`;
+    }
+
+    function renderSummary() {
+      document.getElementById('totalChanges').textContent = currentDiff.summary.totalChanges;
+      document.getElementById('contentChanges').textContent = currentDiff.summary.contentChanges;
+      document.getElementById('styleChanges').textContent = currentDiff.summary.styleChanges;
+      document.getElementById('structureChanges').textContent = currentDiff.summary.structureChanges;
+    }
+
+    function setView(view) {
+      currentView = view;
+
+      document.querySelectorAll('#viewAll, #viewContent, #viewStyle, #viewStructure').forEach(btn => btn.classList.remove('active'));
+      document.getElementById('view' + view.charAt(0).toUpperCase() + view.slice(1)).classList.add('active');
+
+      if (currentDiff && currentDiff.urls.length > 0) {
+        selectUrl(currentDiff.urls[0].url);
+      }
+    }
+
+    function setCompareMode(mode) {
+      currentCompareMode = mode;
+
+      document.querySelectorAll('#compareSideBySide, #compareUnified').forEach(btn => btn.classList.remove('active'));
+      document.getElementById('compare' + mode.charAt(0).toUpperCase() + mode.slice(1).replace('-', '')).classList.add('active');
+
+      const container = document.getElementById('diffContainer');
+      if (mode === 'unified') {
+        container.style.gridTemplateColumns = '1fr';
+        document.getElementById('leftPanel').style.display = 'none';
+      } else {
+        container.style.gridTemplateColumns = '1fr 1fr';
+        document.getElementById('leftPanel').style.display = 'block';
+      }
+    }
+
+    async function hashUrl(url) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(url);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
+    }
+
+    function showLoading(show) {
+      document.getElementById('loading').style.display = show ? 'block' : 'none';
+      document.getElementById('diffContainer').style.display = show ? 'none' : (currentDiff ? 'grid' : 'none');
+    }
+
+    function showError(message) {
+      document.getElementById('error').textContent = message;
+      document.getElementById('error').style.display = 'block';
+      setTimeout(() => {
+        document.getElementById('error').style.display = 'none';
+      }, 5000);
+    }
+
+    loadSites();
+  </script>
+</body>
+</html>
