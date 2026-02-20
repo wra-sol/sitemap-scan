@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { BackupFetcher } from './fetcher';
 import type { SiteConfig } from '../types/site';
 
@@ -53,8 +53,8 @@ describe('BackupFetcher', () => {
       const fetchCalls: string[] = [];
       vi.stubGlobal(
         'fetch',
-        vi.fn((input: RequestInfo | URL) => {
-          const url = typeof input === 'string' ? input : input.toString();
+        vi.fn((input: string | Request | URL) => {
+          const url = typeof input === 'string' ? input : (input as Request).url ?? input.toString();
           fetchCalls.push(url);
           const body = url.includes('sitemap-b') ? sitemapB : sitemapA;
           return Promise.resolve(
@@ -123,8 +123,8 @@ describe('BackupFetcher', () => {
 
       const kv = createMockKV(store);
       const fetchCalls: string[] = [];
-      const fetchSpy = vi.fn((input: RequestInfo | URL) => {
-        const url = typeof input === 'string' ? input : (input as Request).url;
+      const fetchSpy = vi.fn((input: string | Request | URL) => {
+        const url = typeof input === 'string' ? input : (input as Request).url ?? String(input);
         fetchCalls.push(url);
         return Promise.resolve(
           new Response('<html><body>ok</body></html>', {
