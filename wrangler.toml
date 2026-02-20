@@ -59,7 +59,6 @@ PUBLIC_BASE_URL =  "https://multi-site-backup.chester-hill-solutions.workers.dev
 # queue = "backup-jobs"
 
 # Cron trigger
-# Runs every 10 minutes to allow batched sites to complete within a day.
-# The worker will skip re-running sites that already completed today unless their sitemap changed.
+# Runs every 5 minutes for faster batch progress on large sites.
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/5 * * * *"]

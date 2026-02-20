@@ -35,26 +35,22 @@ export default {
           console.log(`Backing up: ${site.name} (${site.id})`);
           
           // Use batched backup with continuation support
-          // First, check if there's an existing batch in progress
-          // Batch size of 25: tested to work reliably within subrequest limits
-          let result = await fetcher.performSiteBackup(site, { 
+          // Batch size 30 is the proven safe max; we do up to 2 batches per cron to speed large sites.
+          let result = await fetcher.performSiteBackup(site, {
             continueFromLast: true,
-            batchSize: 25  // Tested safe batch size under subrequest limit
+            batchSize: 30
           });
-          
+
           let totalSuccessful = result.successfulBackups;
           let totalFailed = result.failedBackups;
           let allChangedUrls = [...result.changedUrls];
-          
-          // Continue processing batches until complete (up to a reasonable limit per cron run)
-          // Each batch is fresh Worker invocation for subrequest quota, so we can do more
-          // But we need to be mindful of total execution time (30s limit for cron)
+
           let batchCount = 1;
-          const maxBatchesPerRun = 1; // Only 1 batch per site per cron - subrequests don't reset between batches
-          
+          const maxBatchesPerRun = 2; // 2 batches per site per cron (~60 URLs per 10 min)
+
           while (result.hasMore && batchCount < maxBatchesPerRun) {
             console.log(`${site.name}: Continuing batch ${batchCount + 1}, progress: ${result.progress.percentComplete}%`);
-            result = await fetcher.performSiteBackup(site, { continueFromLast: true, batchSize: 25 });
+            result = await fetcher.performSiteBackup(site, { continueFromLast: true, batchSize: 30 });
             totalSuccessful += result.successfulBackups;
             totalFailed += result.failedBackups;
             allChangedUrls.push(...result.changedUrls);
