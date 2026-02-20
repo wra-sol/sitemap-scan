@@ -38,6 +38,14 @@ export class BackupFetcher {
   private static readonly DEFAULT_BATCH_SIZE = 25;
   private static readonly MAX_BATCH_SIZE = 30; // Proven safe limit
 
+  // Sitemap recursion guards to prevent cycles and runaway parsing
+  private static readonly MAX_SITEMAP_DEPTH = 10;
+  private static readonly MAX_SITEMAPS_VISITED = 500;
+
+  // URL list cache for sitemap-driven sites (avoid re-parsing every cron batch)
+  private static readonly URL_CACHE_CHUNK_SIZE = 2000;
+  private static readonly URL_CACHE_TTL = 86400; // 24h
+
   constructor(kv: KVNamespace) {
     this.kv = kv;
   }
@@ -84,8 +92,25 @@ export class BackupFetcher {
       }
     }
 
-    // Get all URLs (this can be expensive for large sitemaps; we only do it when we intend to work)
-    const allUrls = await this.getUrlsToBackup(siteConfig);
+    // Get all URLs: use cached list when continuing a batch (avoid re-parsing sitemap every run)
+    let allUrls: string[];
+    if (siteConfig.sitemapUrl && hadSavedProgress) {
+      const cached = await this.loadUrlsCache(siteConfig.id, today);
+      if (cached !== null) {
+        allUrls = cached;
+        console.log(`URL cache hit for ${siteConfig.name}: ${allUrls.length} URLs`);
+      } else {
+        allUrls = await this.getUrlsToBackup(siteConfig);
+        if (allUrls.length > 0) {
+          await this.saveUrlsCache(siteConfig.id, today, allUrls);
+        }
+      }
+    } else {
+      allUrls = await this.getUrlsToBackup(siteConfig);
+      if (siteConfig.sitemapUrl && allUrls.length > 0) {
+        await this.saveUrlsCache(siteConfig.id, today, allUrls);
+      }
+    }
     const totalUrls = allUrls.length;
 
     // Slice URLs for this batch
@@ -235,6 +260,69 @@ export class BackupFetcher {
     await this.kv.delete(key);
   }
 
+  private async loadUrlsCache(siteId: string, date: string): Promise<string[] | null> {
+    const metaKey = `urls_cache:${siteId}:${date}`;
+    const metaRaw = await this.kv.get(metaKey);
+    if (!metaRaw) return null;
+    try {
+      const meta = JSON.parse(metaRaw) as { chunkCount: number; totalUrls: number };
+      const { chunkCount } = meta;
+      if (chunkCount <= 0) return [];
+      const chunks: string[][] = [];
+      for (let i = 0; i < chunkCount; i++) {
+        const chunkRaw = await this.kv.get(`urls_cache:${siteId}:${date}:chunk:${i}`);
+        if (!chunkRaw) return null;
+        chunks.push(JSON.parse(chunkRaw) as string[]);
+      }
+      return chunks.flat();
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveUrlsCache(siteId: string, date: string, urls: string[]): Promise<void> {
+    const chunkSize = BackupFetcher.URL_CACHE_CHUNK_SIZE;
+    const ttl = BackupFetcher.URL_CACHE_TTL;
+    const chunkCount = Math.ceil(urls.length / chunkSize);
+    const metaKey = `urls_cache:${siteId}:${date}`;
+    await this.kv.put(
+      metaKey,
+      JSON.stringify({ chunkCount, totalUrls: urls.length }),
+      { expirationTtl: ttl }
+    );
+    for (let i = 0; i < chunkCount; i++) {
+      const chunk = urls.slice(i * chunkSize, (i + 1) * chunkSize);
+      await this.kv.put(`urls_cache:${siteId}:${date}:chunk:${i}`, JSON.stringify(chunk), { expirationTtl: ttl });
+    }
+  }
+
+  /** Clear URL cache for a site (all dates). Used by reset endpoint. */
+  async clearUrlsCache(siteId: string): Promise<void> {
+    let cursor: string | undefined;
+    do {
+      const list = await this.kv.list({
+        prefix: `urls_cache:${siteId}:`,
+        limit: 1000,
+        cursor
+      }) as { keys: { name: string }[]; list_complete: boolean; cursor?: string };
+      for (const key of list.keys) {
+        await this.kv.delete(key.name);
+      }
+      cursor = list.list_complete ? undefined : (list as { cursor?: string }).cursor;
+    } while (cursor);
+  }
+
+  /** Clear batch progress, URL cache, and full-scan state for a site. Use to unstick a site. */
+  async resetSiteProgress(siteId: string): Promise<void> {
+    await this.clearBatchProgress(siteId);
+    await this.clearUrlsCache(siteId);
+    try {
+      await this.kv.delete(`full_scan:${siteId}`);
+    } catch {
+      // ignore
+    }
+  }
+
   async getBatchProgress(siteId: string): Promise<{ nextOffset: number; totalUrls: number; lastRunTime: string; hasMore: boolean } | null> {
     const progress = await this.loadBatchProgress(siteId);
     if (!progress) return null;
@@ -292,8 +380,40 @@ export class BackupFetcher {
     return urls;
   }
 
-  private async parseSitemap(siteId: string, sitemapUrl: string): Promise<string[]> {
+  /** Canonicalize sitemap URL for cycle detection (normalize and strip fragment). */
+  private canonicalizeSitemapUrl(url: string): string {
     try {
+      const u = new URL(url);
+      u.hash = '';
+      return u.href;
+    } catch {
+      return url;
+    }
+  }
+
+  private async parseSitemap(
+    siteId: string,
+    sitemapUrl: string,
+    visited: Set<string> = new Set(),
+    depth: number = 0
+  ): Promise<string[]> {
+    const canonical = this.canonicalizeSitemapUrl(sitemapUrl);
+    if (visited.has(canonical)) {
+      console.warn(`Sitemap cycle detected, skipping: ${sitemapUrl}`);
+      return [];
+    }
+    if (depth >= BackupFetcher.MAX_SITEMAP_DEPTH) {
+      console.warn(`Sitemap max depth (${BackupFetcher.MAX_SITEMAP_DEPTH}) reached at ${sitemapUrl}`);
+      return [];
+    }
+    if (visited.size >= BackupFetcher.MAX_SITEMAPS_VISITED) {
+      console.warn(`Sitemap max visited (${BackupFetcher.MAX_SITEMAPS_VISITED}) reached, stopping at ${sitemapUrl}`);
+      return [];
+    }
+    visited.add(canonical);
+
+    try {
+      const parseStart = Date.now();
       const response = await fetch(sitemapUrl, {
         signal: AbortSignal.timeout(10000)
       });
@@ -303,35 +423,48 @@ export class BackupFetcher {
       }
 
       const xmlText = await response.text();
-      // Persist sitemap state for change detection.
-      await this.recordSitemapState(siteId, response, xmlText);
+      // Persist sitemap state for change detection (only for root sitemap).
+      if (depth === 0) {
+        await this.recordSitemapState(siteId, response, xmlText);
+      }
       const { XMLParser } = await import('fast-xml-parser');
-      
+
       const parser = new XMLParser({
         ignoreAttributes: false,
         attributeNamePrefix: '@_'
       });
 
       const result = parser.parse(xmlText);
-      
+
       if (result.urlset && result.urlset.url) {
         const urls = Array.isArray(result.urlset.url) ? result.urlset.url : [result.urlset.url];
-        return urls.map((item: any) => item.loc).filter(Boolean);
+        const locs = urls.map((item: any) => item.loc).filter(Boolean);
+        if (depth === 0) {
+          console.log(`Sitemap parsed in ${Date.now() - parseStart}ms: ${locs.length} URLs from ${sitemapUrl}`);
+        }
+        return locs;
       }
 
       if (result.sitemapindex && result.sitemapindex.sitemap) {
-        const sitemaps = Array.isArray(result.sitemapindex.sitemap) ? result.sitemapindex.sitemap : [result.sitemapindex.sitemap];
+        const sitemaps = Array.isArray(result.sitemapindex.sitemap)
+          ? result.sitemapindex.sitemap
+          : [result.sitemapindex.sitemap];
         const allUrls: string[] = [];
-        
+
         for (const sitemap of sitemaps) {
+          const loc = typeof sitemap.loc === 'string' ? sitemap.loc : sitemap?.loc;
+          if (!loc) continue;
           try {
-            const subUrls = await this.parseSitemap(siteId, sitemap.loc);
+            const subUrls = await this.parseSitemap(siteId, loc, visited, depth + 1);
             allUrls.push(...subUrls);
           } catch (error) {
-            console.error(`Failed to parse sub-sitemap ${sitemap.loc}:`, error);
+            console.error(`Failed to parse sub-sitemap ${loc}:`, error);
           }
         }
-        
+
+        if (depth === 0) {
+          console.log(`Sitemap index parsed in ${Date.now() - parseStart}ms: ${allUrls.length} URLs from ${visited.size} sitemaps`);
+        }
         return allUrls;
       }
 

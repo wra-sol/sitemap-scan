@@ -1,0 +1,164 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BackupFetcher } from './fetcher';
+import type { SiteConfig } from '../types/site';
+
+function createMockKV(initial: Record<string, string> = {}): KVNamespace {
+  const store = new Map<string, string>(Object.entries(initial));
+  return {
+    get: vi.fn((key: string) => Promise.resolve(store.get(key) ?? null)),
+    put: vi.fn((key: string, value: string) => {
+      store.set(key, value);
+      return Promise.resolve();
+    }),
+    delete: vi.fn((key: string) => {
+      store.delete(key);
+      return Promise.resolve();
+    }),
+    list: vi.fn(() =>
+      Promise.resolve({
+        keys: Array.from(store.keys()).map((name) => ({ name, expiration: undefined, metadata: undefined })),
+        list_complete: true,
+        cursor: undefined
+      })
+    )
+  } as unknown as KVNamespace;
+}
+
+function minimalSiteConfig(overrides: Partial<SiteConfig> = {}): SiteConfig {
+  return {
+    id: 'test-site',
+    name: 'Test Site',
+    baseUrl: 'https://example.com',
+    sitemapUrl: 'https://example.com/sitemap.xml',
+    retentionDays: 7,
+    schedule: '0 2 * * *',
+    fetchOptions: { timeout: 10000, retries: 2, concurrency: 3 },
+    changeThreshold: { minChangeSize: 0, ignorePatterns: [] },
+    ...overrides
+  };
+}
+
+describe('BackupFetcher', () => {
+  describe('sitemap cycle detection', () => {
+    it('terminates when sitemap index has cycle (A → B → A) and returns finite list', async () => {
+      const sitemapA = `<?xml version="1.0"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://example.com/sitemap-b.xml</loc></sitemap>
+</sitemapindex>`;
+      const sitemapB = `<?xml version="1.0"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://example.com/sitemap.xml</loc></sitemap>
+</sitemapindex>`;
+
+      const fetchCalls: string[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) => {
+          const url = typeof input === 'string' ? input : input.toString();
+          fetchCalls.push(url);
+          const body = url.includes('sitemap-b') ? sitemapB : sitemapA;
+          return Promise.resolve(
+            new Response(body, {
+              status: 200,
+              headers: new Headers({ 'Content-Type': 'application/xml' })
+            })
+          );
+        })
+      );
+
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const config = minimalSiteConfig({ sitemapUrl: 'https://example.com/sitemap.xml' });
+
+      const result = await fetcher.performSiteBackup(config, { continueFromLast: false, batchSize: 25 });
+
+      expect(result.totalUrls).toBe(0);
+      expect(fetchCalls.length).toBeLessThanOrEqual(5);
+      vi.unstubAllGlobals();
+    });
+
+    it('returns URLs from flat urlset without cycle', async () => {
+      const urlset = `<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/page1</loc></url>
+  <url><loc>https://example.com/page2</loc></url>
+</urlset>`;
+
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() =>
+          Promise.resolve(
+            new Response(urlset, { status: 200, headers: new Headers({ 'Content-Type': 'application/xml' }) })
+          )
+        )
+      );
+
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const config = minimalSiteConfig({ sitemapUrl: 'https://example.com/sitemap.xml' });
+
+      const result = await fetcher.performSiteBackup(config, { continueFromLast: false, batchSize: 25 });
+
+      expect(result.totalUrls).toBe(2);
+      vi.unstubAllGlobals();
+    });
+  });
+
+  describe('URL cache', () => {
+    it('uses cached URL list when continueFromLast and batch progress exist, so fetch (sitemap) is not called', async () => {
+      const today = new Date().toISOString().split('T')[0];
+      const cachedUrls = Array.from({ length: 100 }, (_, i) => `https://example.com/page${i}`);
+      const metaKey = `urls_cache:test-site:${today}`;
+      const chunk0Key = `urls_cache:test-site:${today}:chunk:0`;
+      const chunk0 = cachedUrls.slice(0, 2000);
+      const store: Record<string, string> = {
+        [`batch_progress:test-site`]: JSON.stringify({
+          nextOffset: 25,
+          totalUrls: 100,
+          lastRunTime: new Date().toISOString()
+        }),
+        [metaKey]: JSON.stringify({ chunkCount: 1, totalUrls: 100 }),
+        [chunk0Key]: JSON.stringify(chunk0)
+      };
+
+      const kv = createMockKV(store);
+      const fetchCalls: string[] = [];
+      const fetchSpy = vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : (input as Request).url;
+        fetchCalls.push(url);
+        return Promise.resolve(
+          new Response('<html><body>ok</body></html>', {
+            status: 200,
+            headers: new Headers({ 'Content-Type': 'text/html' })
+          })
+        );
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const fetcher = new BackupFetcher(kv);
+      const config = minimalSiteConfig({ sitemapUrl: 'https://example.com/sitemap.xml' });
+
+      const result = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+
+      expect(result.totalUrls).toBe(100);
+      const sitemapFetches = fetchCalls.filter((u) => u.includes('sitemap') || u.endsWith('.xml'));
+      expect(sitemapFetches.length).toBe(0);
+      vi.unstubAllGlobals();
+    });
+  });
+
+  describe('resetSiteProgress', () => {
+    it('clears batch progress, URL cache keys, and full_scan for site', async () => {
+      const kv = createMockKV({
+        'batch_progress:test-site': '{}',
+        'urls_cache:test-site:2025-01-01': '{}',
+        'full_scan:test-site': '{}'
+      });
+      const fetcher = new BackupFetcher(kv);
+      await fetcher.resetSiteProgress('test-site');
+      expect(kv.delete).toHaveBeenCalledWith('batch_progress:test-site');
+      expect(kv.delete).toHaveBeenCalledWith('full_scan:test-site');
+      expect(kv.list).toHaveBeenCalledWith(expect.objectContaining({ prefix: 'urls_cache:test-site:' }));
+    });
+  });
+});

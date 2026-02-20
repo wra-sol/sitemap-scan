@@ -360,6 +360,20 @@ async function handlePostRequest(
         JSON.stringify(progress || { hasMore: false, message: 'No batch in progress' }),
         { headers: { 'Content-Type': 'application/json' } }
       );
+
+    case '/api/backup/reset':
+      const resetBody = await request.json() as { siteId: string };
+      const resetSiteConfig = await siteManager.getSiteConfig(resetBody.siteId);
+      if (!resetSiteConfig) {
+        return new Response('Site not found', { status: 404 });
+      }
+      const { BackupFetcher: ResetFetcher } = await import('./backup/fetcher');
+      const resetFetcher = new ResetFetcher(env.BACKUP_KV);
+      await resetFetcher.resetSiteProgress(resetBody.siteId);
+      return new Response(
+        JSON.stringify({ success: true, message: 'Batch progress and URL cache cleared for site' }),
+        { headers: { 'Content-Type': 'application/json' } }
+      );
     
     default:
       return new Response('Not found', { status: 404 });
