@@ -13,6 +13,15 @@ export interface BatchedBackupResult {
   processedInBatch: number;
   successfulBackups: number;
   failedBackups: number;
+  /**
+   * Pages successfully written to KV for this invocation.
+   * This can be lower than `successfulBackups` if KV writes fail.
+   */
+  storedBackups: number;
+  /**
+   * Pages fetched successfully but that failed to write to KV.
+   */
+  failedStores: number;
   changedUrls: string[];
   executionTime: number;
   errors: string[];
@@ -132,6 +141,8 @@ export class BackupFetcher {
         processedInBatch: 0,
         successfulBackups: 0,
         failedBackups: 0,
+        storedBackups: 0,
+        failedStores: 0,
         changedUrls: [],
         executionTime: Date.now() - startTime,
         errors: [],
@@ -162,7 +173,7 @@ export class BackupFetcher {
       successfulResults
     );
 
-    await this.storeBackups(siteConfig.id, successfulResults);
+    const storeStats = await this.storeBackups(siteConfig.id, successfulResults);
     
     // Only cleanup on first batch to avoid repeated cleanup
     if (batchOffset === 0) {
@@ -170,7 +181,10 @@ export class BackupFetcher {
     }
 
     const executionTime = Date.now() - startTime;
-    const errors = failedResults.map(r => r.error || 'Unknown error');
+    const errors = [
+      ...failedResults.map(r => r.error || 'Unknown error'),
+      ...storeStats.errors
+    ];
 
     // Calculate next batch info
     const nextOffset = batchOffset + processedInBatch;
@@ -201,6 +215,8 @@ export class BackupFetcher {
       processedInBatch,
       successfulBackups: successfulResults.length,
       failedBackups: failedResults.length,
+      storedBackups: storeStats.storedBackups,
+      failedStores: storeStats.failedStores,
       changedUrls,
       executionTime,
       errors,
@@ -223,6 +239,8 @@ export class BackupFetcher {
       processedInBatch: 0,
       successfulBackups: 0,
       failedBackups: 0,
+      storedBackups: 0,
+      failedStores: 0,
       changedUrls: [],
       executionTime: Date.now() - startTime,
       errors: [],
@@ -851,8 +869,14 @@ export class BackupFetcher {
     return changedUrls;
   }
 
-  private async storeBackups(siteId: string, results: BackupResult[]): Promise<void> {
+  private async storeBackups(
+    siteId: string,
+    results: BackupResult[]
+  ): Promise<{ storedBackups: number; failedStores: number; errors: string[] }> {
     const date = new Date().toISOString().split('T')[0];
+    let storedBackups = 0;
+    let failedStores = 0;
+    const errors: string[] = [];
     
     for (const result of results) {
       if (!result.metadata || !result.content) continue;
@@ -874,10 +898,15 @@ export class BackupFetcher {
           this.kv.put(latestKey, JSON.stringify(result.metadata)),
           ...(previousLatest ? [this.kv.put(prevLatestKey, previousLatest)] : [])
         ]);
+        storedBackups++;
       } catch (error) {
+        failedStores++;
         console.error(`Failed to store backup for ${result.url}:`, error);
+        errors.push(`Store failed for ${result.url}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+
+    return { storedBackups, failedStores, errors };
   }
 
   private async cleanupOldBackups(siteId: string, retentionDays: number): Promise<void> {

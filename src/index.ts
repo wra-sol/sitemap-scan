@@ -43,6 +43,8 @@ export default {
 
           let totalSuccessful = result.successfulBackups;
           let totalFailed = result.failedBackups;
+          let totalStored = result.storedBackups;
+          let totalStoreFailed = result.failedStores;
           let allChangedUrls = [...result.changedUrls];
 
           let batchCount = 1;
@@ -53,6 +55,8 @@ export default {
             result = await fetcher.performSiteBackup(site, { continueFromLast: true, batchSize: 30 });
             totalSuccessful += result.successfulBackups;
             totalFailed += result.failedBackups;
+            totalStored += result.storedBackups;
+            totalStoreFailed += result.failedStores;
             allChangedUrls.push(...result.changedUrls);
             batchCount++;
           }
@@ -75,6 +79,8 @@ export default {
               totalUrls: result.totalUrls,
               successfulBackups: totalSuccessful,
               failedBackups: totalFailed,
+              storedBackups: totalStored,
+              failedStores: totalStoreFailed,
               changedUrls: allChangedUrls,
               executionTime: result.executionTime,
               errors: result.errors,
@@ -316,6 +322,8 @@ async function handlePostRequest(
         totalUrls: backupResult.totalUrls,
         successfulBackups: backupResult.successfulBackups,
         failedBackups: backupResult.failedBackups,
+        storedBackups: backupResult.storedBackups,
+        failedStores: backupResult.failedStores,
         changedUrls: backupResult.changedUrls,
         executionTime: backupResult.executionTime,
         errors: backupResult.errors,

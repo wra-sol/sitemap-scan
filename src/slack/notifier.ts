@@ -114,6 +114,8 @@ export class SlackNotifier {
     const date = new Date().toISOString().split('T')[0];
     const executionTimeSeconds = (backupResult.executionTime / 1000).toFixed(2);
     const baseUrl = this.getPublicBaseUrl();
+    const processed = backupResult.successfulBackups + backupResult.failedBackups;
+    const storedSuffix = backupResult.failedStores > 0 ? ` (store fails: ${backupResult.failedStores})` : '';
 
     // Only include detailed diffs for a few URLs to keep the Slack payload small.
     const maxUrlsWithDiffs = 3;
@@ -126,13 +128,16 @@ export class SlackNotifier {
         text: { type: 'plain_text', text: `Changes detected: ${siteConfig.name}`, emoji: true }
       },
       {
-        type: 'context',
-        elements: [
-          { type: 'mrkdwn', text: `*Date:* ${date}` },
-          { type: 'mrkdwn', text: `*Changed URLs:* ${backupResult.changedUrls.length}` },
-          { type: 'mrkdwn', text: `*Success:* ${backupResult.successfulBackups}/${backupResult.totalUrls}` },
-          { type: 'mrkdwn', text: `*Time:* ${executionTimeSeconds}s` }
-        ]
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text:
+            `*Date:* ${date}\n` +
+            `*Changed URLs:* ${backupResult.changedUrls.length}\n` +
+            `*Processed:* ${processed}/${backupResult.totalUrls}\n` +
+            `*Stored:* ${backupResult.storedBackups}/${backupResult.successfulBackups}${storedSuffix}\n` +
+            `*Time:* ${executionTimeSeconds}s`
+        }
       }
     ];
 

@@ -52,6 +52,8 @@ export interface SiteBackupResult {
   totalUrls: number;
   successfulBackups: number;
   failedBackups: number;
+  storedBackups: number;
+  failedStores: number;
   changedUrls: string[];
   executionTime: number;
   errors: string[];
