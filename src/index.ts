@@ -307,7 +307,7 @@ async function handlePostRequest(
       const backupResult = await fetcher.performSiteBackup(siteConfig, {
         batchSize: triggerBody.batchSize,
         batchOffset: triggerBody.batchOffset,
-        continueFromLast: triggerBody.continueFromLast
+        continueFromLast: triggerBody.continueFromLast ?? true
       });
       
       const siteBackupResult: SiteBackupResult = {

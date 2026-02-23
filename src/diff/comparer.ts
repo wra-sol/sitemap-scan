@@ -4,8 +4,24 @@ import { minify } from 'html-minifier-terser';
 
 export class ContentComparer {
   private static readonly IGNORE_PATTERNS = [
+    // ISO-ish date/time
     /\b\d{4}-\d{2}-\d{2}\b/g,
     /\b\d{2}:\d{2}:\d{2}\b/g,
+    /\b\d{4}-\d{2}-\d{2}[tT ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g,
+
+    // Common numeric date formats
+    /\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/g, // 02/22/2026, 2-22-26
+    /\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b/g, // 2026/02/22
+
+    // Common human-readable dates
+    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*\d{1,2}(?:st|nd|rd|th)?(?:,\s*)?\s*\d{4}\b/gi,
+    /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*\d{1,2}(?:st|nd|rd|th)?(?:,\s*)?\s*\d{4}\b/gi,
+    /\b\d{1,2}(?:st|nd|rd|th)?\s*(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*\d{4}\b/gi,
+    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b\s*(?=\[REDACTED\])/gi,
+
+    // Relative “calculated” timestamps often used in headers/footers
+    /\b(?:last\s+updated|updated|published|posted|modified|generated)\s*[:\-–—]?\s*(?:today|yesterday|\d+\s+(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago)\b/gi,
+
     /timestamp["\s]*[:=]["\s]*["']?\d+["']?/gi,
     /csrf["\s]*[:=]["\s]*["'][^"']+["']/gi,
     /_requestid["\s]*[:=]["\s]*["'][^"']+["']/gi,

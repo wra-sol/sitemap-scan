@@ -391,6 +391,77 @@ export class BackupFetcher {
     }
   }
 
+  /**
+   * Canonicalize a URL string for sitemap state comparison.
+   * Goal: be stable across non-meaningful sitemap changes (whitespace, query-param order, host casing).
+   */
+  private canonicalizeForSitemapState(url: string): string {
+    try {
+      const u = new URL(url);
+      u.hash = '';
+      u.protocol = u.protocol.toLowerCase();
+      u.hostname = u.hostname.toLowerCase();
+
+      // Normalize query param order but preserve duplicates.
+      const entries = Array.from(u.searchParams.entries()).sort((a, b) => {
+        if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
+        return a[1].localeCompare(b[1]);
+      });
+      const normalized = new URLSearchParams();
+      for (const [k, v] of entries) normalized.append(k, v);
+      u.search = normalized.toString();
+
+      return u.href;
+    } catch {
+      return url;
+    }
+  }
+
+  private async extractSitemapLocs(xmlText: string): Promise<string[]> {
+    try {
+      const { XMLParser } = await import('fast-xml-parser');
+      const parser = new XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: '@_'
+      });
+
+      const result = parser.parse(xmlText);
+
+      if (result.urlset && result.urlset.url) {
+        const urls = Array.isArray(result.urlset.url) ? result.urlset.url : [result.urlset.url];
+        return urls.map((item: any) => item.loc).filter(Boolean);
+      }
+
+      if (result.sitemapindex && result.sitemapindex.sitemap) {
+        const sitemaps = Array.isArray(result.sitemapindex.sitemap)
+          ? result.sitemapindex.sitemap
+          : [result.sitemapindex.sitemap];
+        return sitemaps
+          .map((s: any) => (typeof s.loc === 'string' ? s.loc : s?.loc))
+          .filter(Boolean);
+      }
+
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async calculateSitemapSemanticHash(xmlText: string): Promise<{ semanticHash?: string; locCount: number }> {
+    const locs = await this.extractSitemapLocs(xmlText);
+    const canonicalLocs = locs
+      .map((l) => this.canonicalizeForSitemapState(String(l).trim()))
+      .filter(Boolean);
+    const uniqueSorted = Array.from(new Set(canonicalLocs)).sort();
+
+    if (uniqueSorted.length === 0) {
+      return { semanticHash: undefined, locCount: 0 };
+    }
+
+    const semanticHash = await this.calculateHash(uniqueSorted.join('\n'));
+    return { semanticHash, locCount: uniqueSorted.length };
+  }
+
   private async parseSitemap(
     siteId: string,
     sitemapUrl: string,
@@ -479,7 +550,9 @@ export class BackupFetcher {
     try {
       const stateKey = `sitemap_state:${siteId}`;
       const existingRaw = await this.kv.get(stateKey);
-      const existing = existingRaw ? JSON.parse(existingRaw) as { etag?: string; lastModified?: string; contentHash?: string } : {};
+      const existing = existingRaw
+        ? JSON.parse(existingRaw) as { etag?: string; lastModified?: string; contentHash?: string; semanticHash?: string; locCount?: number }
+        : {};
 
       const headers: Record<string, string> = {};
       if (existing.etag) headers['If-None-Match'] = existing.etag;
@@ -503,10 +576,20 @@ export class BackupFetcher {
 
       const xmlText = await response.text();
       const newHash = await this.calculateHash(xmlText);
+      const { semanticHash: newSemanticHash } = await this.calculateSitemapSemanticHash(xmlText);
 
-      // If we don't have ETag/Last-Modified support, fall back to content hash comparison.
-      if (!existing.etag && !existing.lastModified && existing.contentHash && existing.contentHash === newHash) {
+      // Prefer semantic comparison (URLs/sitemap list) to avoid re-scans caused by volatile <lastmod> or formatting.
+      if (existing.semanticHash && newSemanticHash && existing.semanticHash === newSemanticHash) {
         // Refresh checkedAt timestamp
+        await this.kv.put(stateKey, JSON.stringify({
+          ...existing,
+          checkedAt: new Date().toISOString()
+        }), { expirationTtl: 7 * 24 * 3600 });
+        return false;
+      }
+
+      // If semantic hash isn't available, fall back to raw content hash (legacy behavior).
+      if (!existing.semanticHash && existing.contentHash && existing.contentHash === newHash) {
         await this.kv.put(stateKey, JSON.stringify({
           ...existing,
           checkedAt: new Date().toISOString()
@@ -527,11 +610,14 @@ export class BackupFetcher {
       const etag = response.headers.get('etag') || undefined;
       const lastModified = response.headers.get('last-modified') || undefined;
       const contentHash = await this.calculateHash(xmlText);
+      const { semanticHash, locCount } = await this.calculateSitemapSemanticHash(xmlText);
       const key = `sitemap_state:${siteId}`;
       await this.kv.put(key, JSON.stringify({
         etag,
         lastModified,
         contentHash,
+        semanticHash,
+        locCount,
         checkedAt: new Date().toISOString()
       }), { expirationTtl: 7 * 24 * 3600 });
     } catch {

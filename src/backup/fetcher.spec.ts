@@ -147,6 +147,66 @@ describe('BackupFetcher', () => {
     });
   });
 
+  describe('sitemap change detection', () => {
+    it('does not re-scan when only <lastmod> changes but <loc> list is stable', async () => {
+      const sitemap1 = `<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/page1</loc><lastmod>2026-02-22T00:00:00Z</lastmod></url>
+  <url><loc>https://example.com/page2</loc><lastmod>2026-02-22T00:00:00Z</lastmod></url>
+</urlset>`;
+      const sitemap2 = `<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/page1</loc><lastmod>2026-02-22T00:05:00Z</lastmod></url>
+  <url><loc>https://example.com/page2</loc><lastmod>2026-02-22T00:05:00Z</lastmod></url>
+</urlset>`;
+
+      const fetchCalls: string[] = [];
+      let sitemapFetchCount = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: string | Request | URL) => {
+          const url = typeof input === 'string' ? input : (input as Request).url ?? String(input);
+          fetchCalls.push(url);
+
+          if (url.endsWith('/sitemap.xml')) {
+            sitemapFetchCount++;
+            const body = sitemapFetchCount === 1 ? sitemap1 : sitemap2;
+            return Promise.resolve(
+              new Response(body, {
+                status: 200,
+                headers: new Headers({ 'Content-Type': 'application/xml' })
+              })
+            );
+          }
+
+          return Promise.resolve(
+            new Response('<html><body>ok</body></html>', {
+              status: 200,
+              headers: new Headers({ 'Content-Type': 'text/html' })
+            })
+          );
+        })
+      );
+
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const config = minimalSiteConfig({ sitemapUrl: 'https://example.com/sitemap.xml' });
+
+      const first = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+      expect(first.totalUrls).toBe(2);
+      expect(await kv.get('full_scan:test-site')).not.toBeNull();
+
+      const second = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+      expect(second.totalUrls).toBe(0);
+      expect(second.processedInBatch).toBe(0);
+
+      // First run: 1 sitemap + 2 pages. Second run: 1 sitemap check only.
+      expect(fetchCalls.length).toBe(4);
+
+      vi.unstubAllGlobals();
+    });
+  });
+
   describe('resetSiteProgress', () => {
     it('clears batch progress, URL cache keys, and full_scan for site', async () => {
       const kv = createMockKV({
