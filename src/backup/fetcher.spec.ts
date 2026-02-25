@@ -14,13 +14,20 @@ function createMockKV(initial: Record<string, string> = {}): KVNamespace {
       store.delete(key);
       return Promise.resolve();
     }),
-    list: vi.fn(() =>
-      Promise.resolve({
-        keys: Array.from(store.keys()).map((name) => ({ name, expiration: undefined, metadata: undefined })),
+    list: vi.fn((opts?: { prefix?: string; limit?: number; cursor?: string }) => {
+      const prefix = opts?.prefix ?? '';
+      const limit = opts?.limit ?? 1000;
+      const keys = Array.from(store.keys())
+        .filter((name) => name.startsWith(prefix))
+        .slice(0, limit)
+        .map((name) => ({ name, expiration: undefined, metadata: undefined }));
+
+      return Promise.resolve({
+        keys,
         list_complete: true,
         cursor: undefined
-      })
-    )
+      });
+    })
   } as unknown as KVNamespace;
 }
 
@@ -202,6 +209,101 @@ describe('BackupFetcher', () => {
 
       // First run: 1 sitemap + 2 pages. Second run: 1 sitemap check only.
       expect(fetchCalls.length).toBe(4);
+
+      vi.unstubAllGlobals();
+    });
+  });
+
+  describe('sitemap listener mode (large sites)', () => {
+    it('switches to listener mode when sitemap has >100 URLs and does not backfill', async () => {
+      const urls = Array.from({ length: 101 }, (_, i) => `https://example.com/page${i + 1}`);
+      const sitemap = `<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
+</urlset>`;
+
+      const fetchSpy = vi.fn((input: string | Request | URL) => {
+        const url = typeof input === 'string' ? input : (input as Request).url ?? String(input);
+        if (url.endsWith('/sitemap.xml')) {
+          return Promise.resolve(
+            new Response(sitemap, { status: 200, headers: new Headers({ 'Content-Type': 'application/xml' }) })
+          );
+        }
+        return Promise.resolve(
+          new Response('<html><body>ok</body></html>', { status: 200, headers: new Headers({ 'Content-Type': 'text/html' }) })
+        );
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const config = minimalSiteConfig({ sitemapUrl: 'https://example.com/sitemap.xml' });
+
+      const result = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+
+      expect(result.totalUrls).toBe(0);
+      expect(result.processedInBatch).toBe(0);
+      expect(await kv.get('sitemap_listener:test-site')).toBe('1');
+      expect(await kv.get('sitemap_snapshot:test-site')).not.toBeNull();
+      // Only sitemap fetch; no page fetches (no backfill)
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      vi.unstubAllGlobals();
+    });
+
+    it('after snapshot, only newly-added sitemap URLs are fetched (and queued if needed)', async () => {
+      const urls1 = Array.from({ length: 101 }, (_, i) => `https://example.com/page${i + 1}`);
+      const urls2 = [...urls1, 'https://example.com/new-page'];
+
+      const sitemap1 = `<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls1.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
+</urlset>`;
+      const sitemap2 = `<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
+</urlset>`;
+
+      let sitemapFetchCount = 0;
+      const fetchSpy = vi.fn((input: string | Request | URL) => {
+        const url = typeof input === 'string' ? input : (input as Request).url ?? String(input);
+        if (url.endsWith('/sitemap.xml')) {
+          sitemapFetchCount++;
+          const body = sitemapFetchCount <= 2 ? sitemap1 : sitemap2;
+          return Promise.resolve(
+            new Response(body, { status: 200, headers: new Headers({ 'Content-Type': 'application/xml' }) })
+          );
+        }
+        return Promise.resolve(
+          new Response('<html><body>ok</body></html>', { status: 200, headers: new Headers({ 'Content-Type': 'text/html' }) })
+        );
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const config = minimalSiteConfig({ sitemapUrl: 'https://example.com/sitemap.xml' });
+
+      // Run 1: enables listener mode and snapshots without backfill
+      const first = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+      expect(first.totalUrls).toBe(0);
+      expect(await kv.get('sitemap_listener:test-site')).toBe('1');
+
+      // Run 2: sitemap unchanged; no work
+      const second = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+      expect(second.processedInBatch).toBe(0);
+
+      // Run 3: sitemap changed and adds 1 URL; only that URL is fetched
+      const third = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+      expect(third.processedInBatch).toBe(1);
+      expect(third.successfulBackups).toBe(1);
+      expect(third.totalUrls).toBe(1);
+
+      const pageFetches = fetchSpy.mock.calls
+        .map((args) => args[0])
+        .map((input) => (typeof input === 'string' ? input : (input as Request).url ?? String(input)))
+        .filter((u) => !u.endsWith('/sitemap.xml'));
+      expect(pageFetches).toEqual(['https://example.com/new-page']);
 
       vi.unstubAllGlobals();
     });

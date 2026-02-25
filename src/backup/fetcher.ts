@@ -55,6 +55,14 @@ export class BackupFetcher {
   private static readonly URL_CACHE_CHUNK_SIZE = 2000;
   private static readonly URL_CACHE_TTL = 86400; // 24h
 
+  /**
+   * For large sites, avoid a perpetual "catch-up crawl".
+   * Instead, snapshot the sitemap and only process newly-added URLs going forward.
+   */
+  private static readonly SITEMAP_LISTENER_URL_THRESHOLD = 100; // enable when sitemap has > 100 URLs
+  private static readonly SITEMAP_SNAPSHOT_TTL = 30 * 24 * 3600; // 30d
+  private static readonly SITEMAP_PENDING_TTL = 7 * 24 * 3600; // 7d
+
   constructor(kv: KVNamespace) {
     this.kv = kv;
   }
@@ -72,6 +80,14 @@ export class BackupFetcher {
       batchOptions?.batchSize ?? BackupFetcher.DEFAULT_BATCH_SIZE,
       BackupFetcher.MAX_BATCH_SIZE
     );
+
+    // If large-site sitemap listener mode is enabled, bypass full-scan batching entirely.
+    if (siteConfig.sitemapUrl) {
+      const listenerEnabled = await this.isSitemapListenerEnabled(siteConfig.id);
+      if (listenerEnabled) {
+        return await this.performSitemapListenerBackup(siteConfig, batchSize, startTime);
+      }
+    }
 
     // If continueFromLast, load saved progress
     let hadSavedProgress = false;
@@ -121,6 +137,18 @@ export class BackupFetcher {
       }
     }
     const totalUrls = allUrls.length;
+
+    // If this is a large sitemap-driven site, switch to "listen to sitemap going forward" mode.
+    // We snapshot the current sitemap URL set and DO NOT backfill the whole site.
+    if (siteConfig.sitemapUrl && totalUrls > BackupFetcher.SITEMAP_LISTENER_URL_THRESHOLD) {
+      await this.enableSitemapListener(siteConfig.id);
+      const canonicalUrls = this.buildCanonicalUrlList(allUrls);
+      await this.saveSitemapSnapshot(siteConfig.id, canonicalUrls);
+      // Clear any in-flight full-scan state so we stop "looping" through the whole site.
+      await this.clearBatchProgress(siteConfig.id);
+      await this.clearUrlsCache(siteConfig.id);
+      return this.buildNoopResult(startTime);
+    }
 
     // Slice URLs for this batch
     const batchUrls = allUrls.slice(batchOffset, batchOffset + batchSize);
@@ -278,6 +306,201 @@ export class BackupFetcher {
     await this.kv.delete(key);
   }
 
+  private async isSitemapListenerEnabled(siteId: string): Promise<boolean> {
+    try {
+      const raw = await this.kv.get(`sitemap_listener:${siteId}`);
+      return raw === '1' || raw === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  private async enableSitemapListener(siteId: string): Promise<void> {
+    try {
+      await this.kv.put(`sitemap_listener:${siteId}`, '1');
+    } catch {
+      // ignore
+    }
+  }
+
+  private buildCanonicalUrlList(urls: string[]): string[] {
+    const set = new Set<string>();
+    for (const u of urls) {
+      const canonical = this.canonicalizeForSitemapState(u);
+      if (canonical) set.add(canonical);
+    }
+    return Array.from(set).sort();
+  }
+
+  private async loadSitemapSnapshot(siteId: string): Promise<Set<string> | null> {
+    const metaKey = `sitemap_snapshot:${siteId}`;
+    const metaRaw = await this.kv.get(metaKey);
+    if (!metaRaw) return null;
+    try {
+      const meta = JSON.parse(metaRaw) as { chunkCount: number };
+      const { chunkCount } = meta;
+      const urls: string[] = [];
+      for (let i = 0; i < chunkCount; i++) {
+        const chunkRaw = await this.kv.get(`sitemap_snapshot:${siteId}:chunk:${i}`);
+        if (!chunkRaw) return null;
+        urls.push(...(JSON.parse(chunkRaw) as string[]));
+      }
+      return new Set(urls);
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveSitemapSnapshot(siteId: string, canonicalUrls: string[]): Promise<void> {
+    const chunkSize = BackupFetcher.URL_CACHE_CHUNK_SIZE;
+    const ttl = BackupFetcher.SITEMAP_SNAPSHOT_TTL;
+    const chunkCount = Math.ceil(canonicalUrls.length / chunkSize);
+    const metaKey = `sitemap_snapshot:${siteId}`;
+    await this.kv.put(
+      metaKey,
+      JSON.stringify({ chunkCount, totalUrls: canonicalUrls.length, updatedAt: new Date().toISOString() }),
+      { expirationTtl: ttl }
+    );
+    for (let i = 0; i < chunkCount; i++) {
+      const chunk = canonicalUrls.slice(i * chunkSize, (i + 1) * chunkSize);
+      await this.kv.put(`sitemap_snapshot:${siteId}:chunk:${i}`, JSON.stringify(chunk), { expirationTtl: ttl });
+    }
+  }
+
+  private async clearSitemapSnapshot(siteId: string): Promise<void> {
+    let cursor: string | undefined;
+    do {
+      const list = await this.kv.list({
+        prefix: `sitemap_snapshot:${siteId}`,
+        limit: 1000,
+        cursor
+      }) as { keys: { name: string }[]; list_complete: boolean; cursor?: string };
+      for (const key of list.keys) {
+        await this.kv.delete(key.name);
+      }
+      cursor = list.list_complete ? undefined : (list as { cursor?: string }).cursor;
+    } while (cursor);
+  }
+
+  private async loadSitemapPending(siteId: string): Promise<string[]> {
+    const key = `sitemap_pending:${siteId}`;
+    const raw = await this.kv.get(key);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((u) => typeof u === 'string');
+    } catch {
+      return [];
+    }
+  }
+
+  private async saveSitemapPending(siteId: string, pending: string[]): Promise<void> {
+    const key = `sitemap_pending:${siteId}`;
+    if (pending.length === 0) {
+      await this.kv.delete(key);
+      return;
+    }
+    // Keep it bounded so a pathological sitemap diff can't explode KV.
+    const unique = Array.from(new Set(pending)).slice(0, 100_000);
+    await this.kv.put(key, JSON.stringify(unique), { expirationTtl: BackupFetcher.SITEMAP_PENDING_TTL });
+  }
+
+  private async performSitemapListenerBackup(
+    siteConfig: SiteConfig,
+    batchSize: number,
+    startTime: number
+  ): Promise<BatchedBackupResult> {
+    if (!siteConfig.sitemapUrl) {
+      return this.buildNoopResult(startTime);
+    }
+
+    const siteId = siteConfig.id;
+    let pending = await this.loadSitemapPending(siteId);
+
+    // Only re-parse the sitemap when we don't already have backlog to work through.
+    if (pending.length === 0) {
+      const changed = await this.hasSitemapChanged(siteId, siteConfig.sitemapUrl);
+      if (!changed) {
+        return this.buildNoopResult(startTime);
+      }
+
+      const allUrls = await this.getUrlsToBackup(siteConfig);
+      const canonicalNow = this.buildCanonicalUrlList(allUrls);
+      const previousSnapshot = await this.loadSitemapSnapshot(siteId);
+
+      // Always update snapshot when sitemap changed.
+      await this.saveSitemapSnapshot(siteId, canonicalNow);
+
+      // First snapshot: "use what we have now" (do not backfill).
+      if (previousSnapshot === null) {
+        return this.buildNoopResult(startTime);
+      }
+
+      pending = canonicalNow.filter((u) => !previousSnapshot.has(u));
+      await this.saveSitemapPending(siteId, pending);
+    }
+
+    if (pending.length === 0) {
+      return this.buildNoopResult(startTime);
+    }
+
+    const batchUrls = pending.slice(0, batchSize);
+    const pendingAfter = pending.slice(batchSize);
+    await this.saveSitemapPending(siteId, pendingAfter);
+
+    const results = await this.fetchUrlsWithConcurrency(
+      batchUrls,
+      siteConfig.fetchOptions,
+      siteConfig.changeThreshold?.ignorePatterns
+    );
+
+    const successfulResults = results.filter(r => r.success);
+    const failedResults = results.filter(r => !r.success);
+
+    const changedUrls = await this.detectChanges(siteConfig.id, successfulResults);
+    const storeStats = await this.storeBackups(siteConfig.id, successfulResults);
+
+    // Retention cleanup (only when we actually write backups)
+    if (successfulResults.length > 0) {
+      await this.cleanupOldBackups(siteConfig.id, siteConfig.retentionDays);
+    }
+
+    const executionTime = Date.now() - startTime;
+    const errors = [
+      ...failedResults.map(r => r.error || 'Unknown error'),
+      ...storeStats.errors
+    ];
+
+    const totalUrls = pending.length;
+    const processedInBatch = batchUrls.length;
+    const hasMore = pendingAfter.length > 0;
+    const completed = processedInBatch;
+    const percentComplete = totalUrls > 0 ? Math.round((completed / totalUrls) * 100) : 100;
+
+    return {
+      totalUrls,
+      processedInBatch,
+      successfulBackups: successfulResults.length,
+      failedBackups: failedResults.length,
+      storedBackups: storeStats.storedBackups,
+      failedStores: storeStats.failedStores,
+      changedUrls,
+      executionTime,
+      errors,
+      results,
+      batchOffset: 0,
+      batchSize,
+      hasMore,
+      nextOffset: hasMore ? processedInBatch : null,
+      progress: {
+        completed,
+        total: totalUrls,
+        percentComplete
+      }
+    };
+  }
+
   private async loadUrlsCache(siteId: string, date: string): Promise<string[] | null> {
     const metaKey = `urls_cache:${siteId}:${date}`;
     const metaRaw = await this.kv.get(metaKey);
@@ -336,6 +559,13 @@ export class BackupFetcher {
     await this.clearUrlsCache(siteId);
     try {
       await this.kv.delete(`full_scan:${siteId}`);
+    } catch {
+      // ignore
+    }
+    try {
+      await this.kv.delete(`sitemap_listener:${siteId}`);
+      await this.kv.delete(`sitemap_pending:${siteId}`);
+      await this.clearSitemapSnapshot(siteId);
     } catch {
       // ignore
     }
