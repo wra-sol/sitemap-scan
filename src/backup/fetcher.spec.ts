@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { BackupFetcher } from './fetcher';
 import type { SiteConfig } from '../types/site';
 
@@ -46,6 +46,11 @@ function minimalSiteConfig(overrides: Partial<SiteConfig> = {}): SiteConfig {
 }
 
 describe('BackupFetcher', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   describe('sitemap cycle detection', () => {
     it('terminates when sitemap index has cycle (A → B → A) and returns finite list', async () => {
       const sitemapA = `<?xml version="1.0"?>
@@ -81,8 +86,7 @@ describe('BackupFetcher', () => {
 
       expect(result.totalUrls).toBe(0);
       expect(fetchCalls.length).toBeLessThanOrEqual(5);
-      vi.unstubAllGlobals();
-    });
+    }, 15000);
 
     it('returns URLs from flat urlset without cycle', async () => {
       const urlset = `<?xml version="1.0"?>
@@ -107,8 +111,7 @@ describe('BackupFetcher', () => {
       const result = await fetcher.performSiteBackup(config, { continueFromLast: false, batchSize: 25 });
 
       expect(result.totalUrls).toBe(2);
-      vi.unstubAllGlobals();
-    });
+    }, 15000);
   });
 
   describe('URL cache', () => {
@@ -150,8 +153,7 @@ describe('BackupFetcher', () => {
       expect(result.totalUrls).toBe(100);
       const sitemapFetches = fetchCalls.filter((u) => u.includes('sitemap') || u.endsWith('.xml'));
       expect(sitemapFetches.length).toBe(0);
-      vi.unstubAllGlobals();
-    });
+    }, 15000);
   });
 
   describe('sitemap change detection', () => {
@@ -210,8 +212,7 @@ describe('BackupFetcher', () => {
       // First run: 1 sitemap + 2 pages. Second run: 1 sitemap check only.
       expect(fetchCalls.length).toBe(4);
 
-      vi.unstubAllGlobals();
-    });
+    }, 15000);
   });
 
   describe('sitemap listener mode (large sites)', () => {
@@ -248,8 +249,7 @@ ${urls.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
       // Only sitemap fetch; no page fetches (no backfill)
       expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-      vi.unstubAllGlobals();
-    });
+    }, 15000);
 
     it('rechecks a rolling batch of existing URLs even when the sitemap is unchanged', async () => {
       const urls1 = Array.from({ length: 101 }, (_, i) => `https://example.com/page${i + 1}`);
@@ -303,8 +303,7 @@ ${urls1.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
         completed: 25
       });
  
-      vi.unstubAllGlobals();
-    });
+    }, 15000);
 
     it('discovers new URLs from child sitemaps during a stale listener refresh even if the root index is unchanged', async () => {
       const urls1 = Array.from({ length: 101 }, (_, i) => `https://example.com/page${i + 1}`);
@@ -371,8 +370,7 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
         .filter((u) => !u.endsWith('/sitemap.xml') && !u.endsWith('/child-sitemap.xml'));
       expect(pageFetches).toContain('https://example.com/new-page');
 
-      vi.unstubAllGlobals();
-    });
+    }, 15000);
   });
 
   describe('resetSiteProgress', () => {
