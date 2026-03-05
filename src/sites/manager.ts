@@ -1,4 +1,5 @@
 import { SiteConfig } from '../types/site';
+import { SiteValidator } from './validator';
 
 export class SiteManager {
   private kv: KVNamespace;
@@ -78,71 +79,7 @@ export class SiteManager {
   }
 
   async validateSiteConfig(config: SiteConfig): Promise<{ valid: boolean; errors: string[] }> {
-    const errors: string[] = [];
-
-    if (!config.id || config.id.trim() === '') {
-      errors.push('Site ID is required');
-    }
-
-    if (!config.name || config.name.trim() === '') {
-      errors.push('Site name is required');
-    }
-
-    if (!config.baseUrl || config.baseUrl.trim() === '') {
-      errors.push('Base URL is required');
-    } else {
-      try {
-        new URL(config.baseUrl);
-      } catch {
-        errors.push('Base URL must be a valid URL');
-      }
-    }
-
-    if (config.sitemapUrl) {
-      try {
-        new URL(config.sitemapUrl);
-      } catch {
-        errors.push('Sitemap URL must be a valid URL');
-      }
-    }
-
-    if (config.urls && config.urls.length > 0) {
-      for (const url of config.urls) {
-        try {
-          new URL(url);
-        } catch {
-          errors.push(`Invalid URL in urls array: ${url}`);
-        }
-      }
-    }
-
-    if (!config.sitemapUrl && (!config.urls || config.urls.length === 0)) {
-      errors.push('Either sitemapUrl or urls array must be provided');
-    }
-
-    if (!config.schedule || config.schedule.trim() === '') {
-      errors.push('Schedule is required');
-    }
-
-    if (!config.fetchOptions) {
-      errors.push('Fetch options are required');
-    } else {
-      if (config.fetchOptions.timeout < 1000 || config.fetchOptions.timeout > 30000) {
-        errors.push('Fetch timeout must be between 1000ms and 30000ms');
-      }
-      if (config.fetchOptions.retries < 0 || config.fetchOptions.retries > 5) {
-        errors.push('Fetch retries must be between 0 and 5');
-      }
-      if (config.fetchOptions.concurrency < 1 || config.fetchOptions.concurrency > 20) {
-        errors.push('Fetch concurrency must be between 1 and 20');
-      }
-    }
-
-    if (!config.changeThreshold) {
-      errors.push('Change threshold configuration is required');
-    }
-
-    return { valid: errors.length === 0, errors };
+    return SiteValidator.validateFullConfig(config);
   }
 
   async getSitesBySchedule(schedule: string): Promise<SiteConfig[]> {

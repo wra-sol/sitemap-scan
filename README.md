@@ -62,10 +62,16 @@ A comprehensive backup utility for monitoring multiple websites, detecting chang
    # Enter your Slack webhook URL when prompted
    ```
 
-5. **Set your Worker public URL (for Slack links)**:
+5. **Set an admin API token**:
+   ```bash
+   wrangler secret put ADMIN_API_TOKEN
+   # Use this token with Authorization: Bearer <token> or X-API-Key: <token>
+   ```
+
+6. **Set your Worker public URL (for Slack links)**:
    Update `PUBLIC_BASE_URL` in `wrangler.toml` to match your deployed Worker URL.
 
-6. **Deploy**:
+7. **Deploy**:
    ```bash
    wrangler deploy
    ```
@@ -171,15 +177,13 @@ curl -X POST https://your-worker.your-subdomain.workers.dev/api/backup/trigger \
 
 ## Scheduling
 
-The system uses staggered scheduling across multiple cron triggers:
+The Worker runs on a single global cron every 5 minutes. Each site's configured `schedule` is evaluated against the current UTC time, and only matching sites are processed in that tick.
 
-- `0 1 * * *` - 1 AM UTC (Group A)
-- `0 3 * * *` - 3 AM UTC (Group B)
-- `0 5 * * *` - 5 AM UTC (Group C)
-- `0 7 * * *` - 7 AM UTC (Group D)
-- `0 9 * * *` - 9 AM UTC (Group E)
+This means:
 
-Sites are automatically distributed across these groups based on their schedule configuration.
+- `wrangler.toml` controls how often the Worker wakes up
+- each site's `schedule` controls when that specific site is eligible to run
+- large sites may continue over multiple 5-minute invocations because batching and continuation are used to stay within Workers limits
 
 ## Change Detection
 
@@ -232,6 +236,7 @@ Notifications include:
 ## Security Considerations
 
 - **Secrets Management**: Slack webhooks stored as Workers secrets
+- **Admin API Protection**: Set `ADMIN_API_TOKEN` and require it for all HTTP routes outside local dev
 - **Input Validation**: All API inputs validated against schema
 - **Rate Limiting**: Configurable concurrency prevents abuse
 - **HTTPS Only**: All communications over HTTPS

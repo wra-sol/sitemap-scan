@@ -62,6 +62,7 @@ export class BackupFetcher {
   private static readonly SITEMAP_LISTENER_URL_THRESHOLD = 100; // enable when sitemap has > 100 URLs
   private static readonly SITEMAP_SNAPSHOT_TTL = 30 * 24 * 3600; // 30d
   private static readonly SITEMAP_PENDING_TTL = 7 * 24 * 3600; // 7d
+  private static readonly SITEMAP_LISTENER_REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1h
 
   constructor(kv: KVNamespace) {
     this.kv = kv;
@@ -333,11 +334,20 @@ export class BackupFetcher {
   }
 
   private async loadSitemapSnapshot(siteId: string): Promise<Set<string> | null> {
+    const snapshotState = await this.loadSitemapSnapshotState(siteId);
+    return snapshotState ? new Set(snapshotState.urls) : null;
+  }
+
+  private async loadSitemapSnapshotState(siteId: string): Promise<{
+    urls: string[];
+    updatedAt?: string;
+    totalUrls: number;
+  } | null> {
     const metaKey = `sitemap_snapshot:${siteId}`;
     const metaRaw = await this.kv.get(metaKey);
     if (!metaRaw) return null;
     try {
-      const meta = JSON.parse(metaRaw) as { chunkCount: number };
+      const meta = JSON.parse(metaRaw) as { chunkCount: number; updatedAt?: string; totalUrls?: number };
       const { chunkCount } = meta;
       const urls: string[] = [];
       for (let i = 0; i < chunkCount; i++) {
@@ -345,7 +355,11 @@ export class BackupFetcher {
         if (!chunkRaw) return null;
         urls.push(...(JSON.parse(chunkRaw) as string[]));
       }
-      return new Set(urls);
+      return {
+        urls,
+        updatedAt: meta.updatedAt,
+        totalUrls: meta.totalUrls ?? urls.length
+      };
     } catch {
       return null;
     }
@@ -406,6 +420,111 @@ export class BackupFetcher {
     await this.kv.put(key, JSON.stringify(unique), { expirationTtl: BackupFetcher.SITEMAP_PENDING_TTL });
   }
 
+  private async loadSitemapListenerCursor(siteId: string): Promise<number> {
+    const raw = await this.kv.get(`sitemap_listener_cursor:${siteId}`);
+    if (!raw) return 0;
+    const cursor = Number.parseInt(raw, 10);
+    return Number.isFinite(cursor) && cursor >= 0 ? cursor : 0;
+  }
+
+  private async saveSitemapListenerCursor(siteId: string, cursor: number): Promise<void> {
+    await this.kv.put(`sitemap_listener_cursor:${siteId}`, String(Math.max(0, cursor)), {
+      expirationTtl: BackupFetcher.SITEMAP_SNAPSHOT_TTL
+    });
+  }
+
+  private isSitemapListenerRefreshDue(updatedAt?: string): boolean {
+    if (!updatedAt) {
+      return true;
+    }
+
+    const updatedAtTime = new Date(updatedAt).getTime();
+    if (Number.isNaN(updatedAtTime)) {
+      return true;
+    }
+
+    return Date.now() - updatedAtTime >= BackupFetcher.SITEMAP_LISTENER_REFRESH_INTERVAL_MS;
+  }
+
+  private async refreshSitemapListenerSnapshot(siteConfig: SiteConfig): Promise<{
+    snapshotUrls: string[];
+    newUrls: string[];
+  }> {
+    if (!siteConfig.sitemapUrl) {
+      return { snapshotUrls: [], newUrls: [] };
+    }
+
+    const snapshotState = await this.loadSitemapSnapshotState(siteConfig.id);
+    const previousSnapshot = snapshotState ? new Set(snapshotState.urls) : null;
+    const allUrls = await this.getUrlsToBackup(siteConfig);
+    const canonicalNow = this.buildCanonicalUrlList(allUrls);
+
+    await this.saveSitemapSnapshot(siteConfig.id, canonicalNow);
+
+    if (previousSnapshot === null) {
+      return { snapshotUrls: canonicalNow, newUrls: [] };
+    }
+
+    return {
+      snapshotUrls: canonicalNow,
+      newUrls: canonicalNow.filter((url) => !previousSnapshot.has(url))
+    };
+  }
+
+  private async getSitemapListenerBatch(
+    siteId: string,
+    snapshotUrls: string[],
+    batchSize: number
+  ): Promise<{
+    batchUrls: string[];
+    hasMore: boolean;
+    completed: number;
+    nextCursor: number;
+    total: number;
+  }> {
+    if (snapshotUrls.length === 0) {
+      return {
+        batchUrls: [],
+        hasMore: false,
+        completed: 0,
+        nextCursor: 0,
+        total: 0
+      };
+    }
+
+    let cursor = await this.loadSitemapListenerCursor(siteId);
+    if (cursor >= snapshotUrls.length) {
+      cursor = 0;
+    }
+
+    const batchUrls = snapshotUrls.slice(cursor, cursor + batchSize);
+    if (batchUrls.length === 0) {
+      await this.saveSitemapListenerCursor(siteId, 0);
+      return {
+        batchUrls: [],
+        hasMore: false,
+        completed: 0,
+        nextCursor: 0,
+        total: snapshotUrls.length
+      };
+    }
+
+    const nextCursorRaw = cursor + batchUrls.length;
+    const completed = Math.min(nextCursorRaw, snapshotUrls.length);
+    const wrapped = nextCursorRaw >= snapshotUrls.length;
+    const nextCursor = wrapped ? 0 : nextCursorRaw;
+
+    await this.saveSitemapListenerCursor(siteId, nextCursor);
+
+    return {
+      batchUrls,
+      hasMore: !wrapped && nextCursor < snapshotUrls.length,
+      completed: wrapped ? snapshotUrls.length : completed,
+      nextCursor,
+      total: snapshotUrls.length
+    };
+  }
+
   private async performSitemapListenerBackup(
     siteConfig: SiteConfig,
     batchSize: number,
@@ -417,37 +536,53 @@ export class BackupFetcher {
 
     const siteId = siteConfig.id;
     let pending = await this.loadSitemapPending(siteId);
+    let snapshotState = await this.loadSitemapSnapshotState(siteId);
+    let snapshotUrls = snapshotState?.urls ?? [];
 
-    // Only re-parse the sitemap when we don't already have backlog to work through.
+    // Refresh sitemap state when backlog is clear and either the root sitemap changed
+    // or the listener snapshot is stale. This catches nested sitemap updates eventually
+    // even when a stable root index does not change.
     if (pending.length === 0) {
-      const changed = await this.hasSitemapChanged(siteId, siteConfig.sitemapUrl);
-      if (!changed) {
-        return this.buildNoopResult(startTime);
+      const rootChanged = await this.hasSitemapChanged(siteId, siteConfig.sitemapUrl);
+      const refreshDue = this.isSitemapListenerRefreshDue(snapshotState?.updatedAt);
+
+      if (rootChanged || refreshDue || snapshotUrls.length === 0) {
+        const refreshed = await this.refreshSitemapListenerSnapshot(siteConfig);
+        snapshotUrls = refreshed.snapshotUrls;
+        pending = refreshed.newUrls;
+        await this.saveSitemapPending(siteId, pending);
+        snapshotState = await this.loadSitemapSnapshotState(siteId);
       }
-
-      const allUrls = await this.getUrlsToBackup(siteConfig);
-      const canonicalNow = this.buildCanonicalUrlList(allUrls);
-      const previousSnapshot = await this.loadSitemapSnapshot(siteId);
-
-      // Always update snapshot when sitemap changed.
-      await this.saveSitemapSnapshot(siteId, canonicalNow);
-
-      // First snapshot: "use what we have now" (do not backfill).
-      if (previousSnapshot === null) {
-        return this.buildNoopResult(startTime);
-      }
-
-      pending = canonicalNow.filter((u) => !previousSnapshot.has(u));
-      await this.saveSitemapPending(siteId, pending);
     }
 
-    if (pending.length === 0) {
+    let batchUrls: string[] = [];
+    let pendingAfter: string[] = [];
+    let totalUrls = pending.length;
+    let completed = 0;
+    let hasMore = false;
+    let nextOffset: number | null = null;
+
+    if (pending.length > 0) {
+      batchUrls = pending.slice(0, batchSize);
+      pendingAfter = pending.slice(batchSize);
+      await this.saveSitemapPending(siteId, pendingAfter);
+
+      totalUrls = pending.length;
+      completed = batchUrls.length;
+      hasMore = pendingAfter.length > 0;
+      nextOffset = hasMore ? batchUrls.length : null;
+    } else if (snapshotUrls.length > 0) {
+      const listenerBatch = await this.getSitemapListenerBatch(siteId, snapshotUrls, batchSize);
+      batchUrls = listenerBatch.batchUrls;
+      totalUrls = listenerBatch.total;
+      completed = listenerBatch.completed;
+      hasMore = listenerBatch.hasMore;
+      nextOffset = listenerBatch.nextCursor;
+    }
+
+    if (batchUrls.length === 0) {
       return this.buildNoopResult(startTime);
     }
-
-    const batchUrls = pending.slice(0, batchSize);
-    const pendingAfter = pending.slice(batchSize);
-    await this.saveSitemapPending(siteId, pendingAfter);
 
     const results = await this.fetchUrlsWithConcurrency(
       batchUrls,
@@ -472,10 +607,7 @@ export class BackupFetcher {
       ...storeStats.errors
     ];
 
-    const totalUrls = pending.length;
     const processedInBatch = batchUrls.length;
-    const hasMore = pendingAfter.length > 0;
-    const completed = processedInBatch;
     const percentComplete = totalUrls > 0 ? Math.round((completed / totalUrls) * 100) : 100;
 
     return {
@@ -492,7 +624,7 @@ export class BackupFetcher {
       batchOffset: 0,
       batchSize,
       hasMore,
-      nextOffset: hasMore ? processedInBatch : null,
+      nextOffset,
       progress: {
         completed,
         total: totalUrls,
@@ -565,18 +697,60 @@ export class BackupFetcher {
     try {
       await this.kv.delete(`sitemap_listener:${siteId}`);
       await this.kv.delete(`sitemap_pending:${siteId}`);
+      await this.kv.delete(`sitemap_listener_cursor:${siteId}`);
       await this.clearSitemapSnapshot(siteId);
     } catch {
       // ignore
     }
   }
 
-  async getBatchProgress(siteId: string): Promise<{ nextOffset: number; totalUrls: number; lastRunTime: string; hasMore: boolean } | null> {
+  async getBatchProgress(siteId: string): Promise<{
+    nextOffset: number;
+    totalUrls: number;
+    lastRunTime: string;
+    hasMore: boolean;
+    mode?: 'batched' | 'listener';
+    pendingNewUrls?: number;
+    monitoringPoolSize?: number;
+    completed?: number;
+    percentComplete?: number;
+  } | null> {
     const progress = await this.loadBatchProgress(siteId);
-    if (!progress) return null;
+    if (progress) {
+      return {
+        ...progress,
+        hasMore: progress.nextOffset < progress.totalUrls,
+        mode: 'batched',
+        completed: progress.nextOffset,
+        percentComplete: progress.totalUrls > 0
+          ? Math.round((progress.nextOffset / progress.totalUrls) * 100)
+          : 100
+      };
+    }
+
+    const listenerEnabled = await this.isSitemapListenerEnabled(siteId);
+    if (!listenerEnabled) return null;
+
+    const [pending, snapshotState, cursorRaw] = await Promise.all([
+      this.loadSitemapPending(siteId),
+      this.loadSitemapSnapshotState(siteId),
+      this.loadSitemapListenerCursor(siteId)
+    ]);
+
+    const monitoringPoolSize = snapshotState?.totalUrls ?? snapshotState?.urls.length ?? 0;
+    const totalUrls = pending.length > 0 ? pending.length : monitoringPoolSize;
+    const completed = pending.length > 0 ? 0 : Math.min(cursorRaw, monitoringPoolSize);
+
     return {
-      ...progress,
-      hasMore: progress.nextOffset < progress.totalUrls
+      nextOffset: pending.length > 0 ? 0 : cursorRaw,
+      totalUrls,
+      lastRunTime: snapshotState?.updatedAt || '',
+      hasMore: pending.length > 0 || monitoringPoolSize > 0,
+      mode: 'listener',
+      pendingNewUrls: pending.length,
+      monitoringPoolSize,
+      completed,
+      percentComplete: totalUrls > 0 ? Math.round((completed / totalUrls) * 100) : 100
     };
   }
 

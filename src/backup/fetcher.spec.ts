@@ -251,27 +251,18 @@ ${urls.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
       vi.unstubAllGlobals();
     });
 
-    it('after snapshot, only newly-added sitemap URLs are fetched (and queued if needed)', async () => {
+    it('rechecks a rolling batch of existing URLs even when the sitemap is unchanged', async () => {
       const urls1 = Array.from({ length: 101 }, (_, i) => `https://example.com/page${i + 1}`);
-      const urls2 = [...urls1, 'https://example.com/new-page'];
-
       const sitemap1 = `<?xml version="1.0"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urls1.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
 </urlset>`;
-      const sitemap2 = `<?xml version="1.0"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
-</urlset>`;
 
-      let sitemapFetchCount = 0;
       const fetchSpy = vi.fn((input: string | Request | URL) => {
         const url = typeof input === 'string' ? input : (input as Request).url ?? String(input);
         if (url.endsWith('/sitemap.xml')) {
-          sitemapFetchCount++;
-          const body = sitemapFetchCount <= 2 ? sitemap1 : sitemap2;
           return Promise.resolve(
-            new Response(body, { status: 200, headers: new Headers({ 'Content-Type': 'application/xml' }) })
+            new Response(sitemap1, { status: 200, headers: new Headers({ 'Content-Type': 'application/xml' }) })
           );
         }
         return Promise.resolve(
@@ -284,26 +275,101 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
       const fetcher = new BackupFetcher(kv);
       const config = minimalSiteConfig({ sitemapUrl: 'https://example.com/sitemap.xml' });
 
-      // Run 1: enables listener mode and snapshots without backfill
+      // Run 1: enables listener mode and snapshots without backfill.
       const first = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
       expect(first.totalUrls).toBe(0);
       expect(await kv.get('sitemap_listener:test-site')).toBe('1');
 
-      // Run 2: sitemap unchanged; no work
+      // Run 2: the watcher should still recheck a rolling batch of existing URLs.
       const second = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
-      expect(second.processedInBatch).toBe(0);
-
-      // Run 3: sitemap changed and adds 1 URL; only that URL is fetched
-      const third = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
-      expect(third.processedInBatch).toBe(1);
-      expect(third.successfulBackups).toBe(1);
-      expect(third.totalUrls).toBe(1);
+      expect(second.processedInBatch).toBe(25);
+      expect(second.totalUrls).toBe(101);
+      expect(second.progress.completed).toBe(25);
 
       const pageFetches = fetchSpy.mock.calls
         .map((args) => args[0])
         .map((input) => (typeof input === 'string' ? input : (input as Request).url ?? String(input)))
         .filter((u) => !u.endsWith('/sitemap.xml'));
-      expect(pageFetches).toEqual(['https://example.com/new-page']);
+
+      expect(pageFetches.length).toBe(25);
+      expect(pageFetches).toContain('https://example.com/page1');
+
+      const progress = await fetcher.getBatchProgress('test-site');
+      expect(progress).toMatchObject({
+        mode: 'listener',
+        pendingNewUrls: 0,
+        monitoringPoolSize: 101,
+        totalUrls: 101,
+        completed: 25
+      });
+ 
+      vi.unstubAllGlobals();
+    });
+
+    it('discovers new URLs from child sitemaps during a stale listener refresh even if the root index is unchanged', async () => {
+      const urls1 = Array.from({ length: 101 }, (_, i) => `https://example.com/page${i + 1}`);
+      const urls2 = [...urls1, 'https://example.com/new-page'];
+      const rootIndex = `<?xml version="1.0"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://example.com/child-sitemap.xml</loc></sitemap>
+</sitemapindex>`;
+      const childSitemap1 = `<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls1.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
+</urlset>`;
+      const childSitemap2 = `<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
+</urlset>`;
+
+      let useUpdatedChildSitemap = false;
+      const fetchSpy = vi.fn((input: string | Request | URL) => {
+        const url = typeof input === 'string' ? input : (input as Request).url ?? String(input);
+        if (url.endsWith('/sitemap.xml')) {
+          return Promise.resolve(
+            new Response(rootIndex, { status: 200, headers: new Headers({ 'Content-Type': 'application/xml' }) })
+          );
+        }
+        if (url.endsWith('/child-sitemap.xml')) {
+          return Promise.resolve(
+            new Response(useUpdatedChildSitemap ? childSitemap2 : childSitemap1, {
+              status: 200,
+              headers: new Headers({ 'Content-Type': 'application/xml' })
+            })
+          );
+        }
+        return Promise.resolve(
+          new Response('<html><body>ok</body></html>', { status: 200, headers: new Headers({ 'Content-Type': 'text/html' }) })
+        );
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const config = minimalSiteConfig({ sitemapUrl: 'https://example.com/sitemap.xml' });
+
+      const first = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+      expect(first.totalUrls).toBe(0);
+      expect(await kv.get('sitemap_listener:test-site')).toBe('1');
+
+      const snapshotRaw = await kv.get('sitemap_snapshot:test-site');
+      expect(snapshotRaw).not.toBeNull();
+      const snapshotMeta = JSON.parse(snapshotRaw as string);
+      snapshotMeta.updatedAt = '2000-01-01T00:00:00.000Z';
+      await kv.put('sitemap_snapshot:test-site', JSON.stringify(snapshotMeta));
+
+      useUpdatedChildSitemap = true;
+
+      const second = await fetcher.performSiteBackup(config, { continueFromLast: true, batchSize: 25 });
+      expect(second.processedInBatch).toBe(1);
+      expect(second.successfulBackups).toBe(1);
+      expect(second.totalUrls).toBe(1);
+
+      const pageFetches = fetchSpy.mock.calls
+        .map((args) => args[0])
+        .map((input) => (typeof input === 'string' ? input : (input as Request).url ?? String(input)))
+        .filter((u) => !u.endsWith('/sitemap.xml') && !u.endsWith('/child-sitemap.xml'));
+      expect(pageFetches).toContain('https://example.com/new-page');
 
       vi.unstubAllGlobals();
     });
@@ -320,6 +386,7 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
       await fetcher.resetSiteProgress('test-site');
       expect(kv.delete).toHaveBeenCalledWith('batch_progress:test-site');
       expect(kv.delete).toHaveBeenCalledWith('full_scan:test-site');
+      expect(kv.delete).toHaveBeenCalledWith('sitemap_listener_cursor:test-site');
       expect(kv.list).toHaveBeenCalledWith(expect.objectContaining({ prefix: 'urls_cache:test-site:' }));
     });
   });

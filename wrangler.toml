@@ -25,6 +25,8 @@ PUBLIC_BASE_URL =  "https://multi-site-backup.chester-hill-solutions.workers.dev
 # Secrets to be set via wrangler CLI:
 # wrangler secret put DEFAULT_SLACK_WEBHOOK
 # DEFAULT_SLACK_WEBHOOK = "<set via: wrangler secret put DEFAULT_SLACK_WEBHOOK>"
+# wrangler secret put ADMIN_API_TOKEN
+# ADMIN_API_TOKEN = "<set via: wrangler secret put ADMIN_API_TOKEN>"
 
 
 

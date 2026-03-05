@@ -1,5 +1,6 @@
 import { SiteConfig, SiteBackupResult } from '../types/site';
 import { ContentComparer } from '../diff/comparer';
+import { ContentChange, StyleChange, StructureChange } from '../types/diff';
 
 export class SlackNotifier {
   private kv: KVNamespace;
@@ -165,7 +166,7 @@ export class SlackNotifier {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*<${changedUrl}|${this.truncateUrl(changedUrl)}>*`
+          text: this.buildUrlHeader(siteConfig.id, changedUrl, date)
         }
       });
 
@@ -239,6 +240,86 @@ export class SlackNotifier {
     return text.substring(0, maxLength - 3) + '...';
   }
 
+  private buildUrlHeader(siteId: string, url: string, date: string): string {
+    const baseUrl = this.getPublicBaseUrl();
+    const truncatedUrl = this.truncateUrl(url);
+
+    if (!baseUrl) {
+      return `*${truncatedUrl}*`;
+    }
+
+    const viewerUrl = `${baseUrl}/diff/viewer?siteId=${encodeURIComponent(siteId)}&date=${encodeURIComponent(date)}`;
+    return `*<${url}|${truncatedUrl}>*  •  <${viewerUrl}|Open in diff viewer>`;
+  }
+
+  private escapeSlackText(text: string): string {
+    return text.replace(/[&<>]/g, (char) => {
+      switch (char) {
+        case '&':
+          return '&amp;';
+        case '<':
+          return '&lt;';
+        case '>':
+          return '&gt;';
+        default:
+          return char;
+      }
+    });
+  }
+
+  private formatSnippet(text?: string, maxLength: number = 140): string {
+    if (!text) return '_empty_';
+
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (!normalized) return '_empty_';
+    return this.escapeSlackText(this.truncateText(normalized, maxLength));
+  }
+
+  private formatBeforeAfter(label: string, before?: string, after?: string, context?: string): string {
+    const beforeText = this.formatSnippet(before);
+    const afterText = this.formatSnippet(after);
+    const contextText = context ? `\n  _${this.escapeSlackText(this.truncateText(context, 120))}_` : '';
+
+    if (before && after) {
+      return `• *${label}*\n  Before: \`${beforeText}\`\n  After: \`${afterText}\`${contextText}`;
+    }
+
+    if (after) {
+      return `• *${label}* added\n  After: \`${afterText}\`${contextText}`;
+    }
+
+    if (before) {
+      return `• *${label}* removed\n  Before: \`${beforeText}\`${contextText}`;
+    }
+
+    return `• *${label}* changed${contextText}`;
+  }
+
+  private formatContentChanges(changes: ContentChange[]): string[] {
+    return changes.map((change) =>
+      this.formatBeforeAfter(change.element, change.before, change.after, change.context)
+    );
+  }
+
+  private formatStyleChanges(changes: StyleChange[]): string[] {
+    return changes.map((change) => {
+      const label = `${change.element}${change.attribute ? `.${change.attribute}` : ''}`;
+      return this.formatBeforeAfter(label, change.before, change.after);
+    });
+  }
+
+  private formatStructureChanges(changes: StructureChange[]): string[] {
+    return changes.map((change) => {
+      const attributes = change.attributes
+        ? ` (${Object.entries(change.attributes)
+            .slice(0, 3)
+            .map(([key, value]) => `${key}=${this.truncateText(value, 24)}`)
+            .join(', ')})`
+        : '';
+      return `• *${change.element}* ${change.change}${attributes}`;
+    });
+  }
+
   private async buildUrlDiffSummary(
     siteId: string,
     url: string,
@@ -293,34 +374,19 @@ export class SlackNotifier {
       `*Summary:* ${detailed.summary.contentChanges} content, ${detailed.summary.styleChanges} style, ${detailed.summary.structureChanges} structure`
     );
 
-    const formatChange = (label: string, before?: string, after?: string) => {
-      const b = before ? this.truncateText(before, 160) : '';
-      const a = after ? this.truncateText(after, 160) : '';
-      if (b && a) return `- *${label}*: \`${b}\` → \`${a}\``;
-      if (!b && a) return `- *${label}*: added \`${a}\``;
-      if (b && !a) return `- *${label}*: removed \`${b}\``;
-      return `- *${label}*: changed`;
-    };
-
     if (contentChanges.length > 0) {
       parts.push(`*Content*`);
-      for (const c of contentChanges) {
-        parts.push(formatChange(c.element, c.before, c.after));
-      }
+      parts.push(...this.formatContentChanges(contentChanges));
     }
 
     if (styleChanges.length > 0) {
       parts.push(`*Style*`);
-      for (const s of styleChanges) {
-        parts.push(formatChange(`${s.element}${s.attribute ? `.${s.attribute}` : ''}`, s.before, s.after));
-      }
+      parts.push(...this.formatStyleChanges(styleChanges));
     }
 
     if (structureChanges.length > 0) {
       parts.push(`*Structure*`);
-      for (const st of structureChanges) {
-        parts.push(`- *${st.element}*: ${st.change}`);
-      }
+      parts.push(...this.formatStructureChanges(structureChanges));
     }
 
     return parts.join('\n');
@@ -339,6 +405,32 @@ export class SlackNotifier {
     error: string,
     context?: any
   ): any {
+    const fields = [
+      {
+        title: 'Site',
+        value: siteConfig.name,
+        short: true
+      },
+      {
+        title: 'Time',
+        value: new Date().toISOString(),
+        short: true
+      },
+      {
+        title: 'Error',
+        value: error.length > 500 ? error.substring(0, 497) + '...' : error,
+        short: false
+      }
+    ];
+
+    if (context) {
+      fields.push({
+        title: 'Context',
+        value: JSON.stringify(context, null, 2),
+        short: false
+      });
+    }
+
     return {
       username: 'Website Backup Monitor',
       icon_emoji: ':x:',
@@ -347,32 +439,7 @@ export class SlackNotifier {
       attachments: [
         {
           color: 'danger',
-          fields: [
-            {
-              title: 'Site',
-              value: siteConfig.name,
-              short: true
-            },
-            {
-              title: 'Time',
-              value: new Date().toISOString(),
-              short: true
-            },
-            {
-              title: 'Error',
-              value: error.length > 500 ? error.substring(0, 497) + '...' : error,
-              short: false
-            }
-          ],
-          ...(context && {
-            fields: [
-              {
-                title: 'Context',
-                value: JSON.stringify(context, null, 2),
-                short: false
-              }
-            ]
-          })
+          fields
         }
       ]
     };

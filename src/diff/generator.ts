@@ -26,7 +26,7 @@ export class DiffGenerator {
       cacheEnabled: true
     }
   ): Promise<DetailedDiff> {
-    const cacheKey = this.getCacheKey(siteId, date, url);
+    const cacheKey = await this.getCacheKey(siteId, date, url);
 
     if (options.cacheEnabled) {
       const cached = await this.getCachedDiff(cacheKey);
@@ -136,7 +136,7 @@ export class DiffGenerator {
     maxDays: number = 30
   ): Promise<Array<{ date: string; hash: string; hasChanges: boolean }>> {
     const history: Array<{ date: string; hash: string; hasChanges: boolean }> = [];
-    const urlHash = await ContentComparer.calculateHash(url);
+    const urlHash = await this.getUrlHash(url);
 
     const today = new Date();
     for (let i = 0; i < maxDays; i++) {
@@ -144,8 +144,8 @@ export class DiffGenerator {
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
 
-      const key = `site:${siteId}:backup:${dateStr}:content:${urlHash}`;
-      const stored = await this.kv.get(key, 'text');
+      const metadataKey = this.getMetadataKey(siteId, dateStr, urlHash);
+      const stored = await this.kv.get(metadataKey, 'text');
 
       if (stored) {
         try {
@@ -176,27 +176,31 @@ export class DiffGenerator {
     date2: string,
     url: string
   ): Promise<DetailedDiff | null> {
-    const urlHash = await ContentComparer.calculateHash(url);
-    const key1 = `site:${siteId}:backup:${date1}:content:${urlHash}`;
-    const key2 = `site:${siteId}:backup:${date2}:content:${urlHash}`;
+    const urlHash = await this.getUrlHash(url);
+    const backupKey1 = this.getBackupKey(siteId, date1, urlHash);
+    const backupKey2 = this.getBackupKey(siteId, date2, urlHash);
+    const metadataKey1 = this.getMetadataKey(siteId, date1, urlHash);
+    const metadataKey2 = this.getMetadataKey(siteId, date2, urlHash);
 
-    const [content1, content2] = await Promise.all([
-      this.kv.get(key1, 'text'),
-      this.kv.get(key2, 'text')
+    const [content1, content2, metadata1, metadata2] = await Promise.all([
+      this.kv.get(backupKey1, 'text'),
+      this.kv.get(backupKey2, 'text'),
+      this.kv.get(metadataKey1, 'text'),
+      this.kv.get(metadataKey2, 'text')
     ]);
 
-    if (!content1 || !content2) {
+    if (!content1 || !content2 || !metadata1 || !metadata2) {
       return null;
     }
 
     try {
-      const data1 = JSON.parse(content1);
-      const data2 = JSON.parse(content2);
+      const data1 = JSON.parse(metadata1) as { hash: string };
+      const data2 = JSON.parse(metadata2) as { hash: string };
 
       return await ContentComparer.classifyChanges(
         url,
-        data1.content,
-        data2.content,
+        content1,
+        content2,
         data1.hash,
         data2.hash,
         date2
@@ -262,8 +266,22 @@ export class DiffGenerator {
     return limited;
   }
 
-  private getCacheKey(siteId: string, date: string, url: string): string {
-    return `diff:${siteId}:${date}:${ContentComparer.calculateHash(url)}`;
+  private async getCacheKey(siteId: string, date: string, url: string): Promise<string> {
+    const urlHash = await this.getUrlHash(url);
+    return `diff:${siteId}:${date}:${urlHash}`;
+  }
+
+  private getBackupKey(siteId: string, date: string, urlHash: string): string {
+    return `backup:${siteId}:${date}:${urlHash}`;
+  }
+
+  private getMetadataKey(siteId: string, date: string, urlHash: string): string {
+    return `meta:${siteId}:${date}:${urlHash}`;
+  }
+
+  private async getUrlHash(url: string): Promise<string> {
+    const fullHash = await ContentComparer.calculateHash(url);
+    return fullHash.substring(0, 16);
   }
 
   private async getCachedDiff(cacheKey: string): Promise<DetailedDiff | null> {

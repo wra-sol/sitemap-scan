@@ -21,6 +21,10 @@ export interface SiteConfig {
   excludePatterns?: string[];
 }
 
+export type PublicSiteConfig = Omit<SiteConfig, 'slackWebhook'> & {
+  hasSlackWebhook: boolean;
+};
+
 export interface BackupMetadata {
   url: string;
   timestamp: string;
