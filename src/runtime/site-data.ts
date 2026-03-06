@@ -1,3 +1,4 @@
+import { KVListResult } from './kv-types';
 async function listKeysWithPrefix(kv: KVNamespace, prefix: string): Promise<string[]> {
   const keys: string[] = [];
   let cursor: string | undefined;
@@ -7,7 +8,7 @@ async function listKeysWithPrefix(kv: KVNamespace, prefix: string): Promise<stri
       prefix,
       limit: 1000,
       cursor
-    }) as KVNamespaceListResult<unknown, string>;
+    }) as KVListResult;
 
     for (const key of list.keys) {
       keys.push(key.name);

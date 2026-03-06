@@ -1,4 +1,5 @@
 import { SiteConfig } from '../types/site';
+import { KVListResult } from './kv-types';
 
 export type SiteRunTrigger = 'scheduled' | 'manual';
 export type SiteRunStatus = 'running' | 'success' | 'partial' | 'failed' | 'noop';
@@ -121,7 +122,7 @@ export class RunStore {
         prefix,
         limit: 1000,
         cursor
-      }) as KVNamespaceListResult<unknown, string>;
+      }) as KVListResult;
 
       for (const key of list.keys) {
         const raw = await this.kv.get(key.name, 'text');

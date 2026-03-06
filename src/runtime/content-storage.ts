@@ -35,13 +35,13 @@ async function collectStream(stream: ReadableStream<Uint8Array>): Promise<Uint8A
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let totalLength = 0;
+  let done = false;
 
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
+    while (!done) {
+      const result = await reader.read();
+      done = result.done;
+      const value = result.value;
 
       if (value) {
         chunks.push(value);
