@@ -1,3 +1,5 @@
+import { BackupFetcher } from '../backup/fetcher';
+import { SlackNotifier } from '../slack/notifier';
 import { SiteConfig, SiteBackupResult } from '../types/site';
 import { JobQueue } from './queue';
 import { SiteManager } from '../sites/manager';
@@ -82,8 +84,7 @@ export class SchedulerDispatcher {
       
       console.log(`Starting backup job for site: ${siteConfig.name} (${siteConfig.id})`);
       
-      const backupModule = await import('../backup/fetcher');
-      const fetcher = new backupModule.BackupFetcher(this.kv);
+      const fetcher = new BackupFetcher(this.kv);
       
       const result = await fetcher.performSiteBackup(siteConfig);
       
@@ -96,8 +97,7 @@ export class SchedulerDispatcher {
           siteName: siteConfig.name
         };
         
-        const slackModule = await import('../slack/notifier');
-        const notifier = new slackModule.SlackNotifier(this.kv);
+        const notifier = new SlackNotifier(this.kv);
         await notifier.sendChangeNotification(siteConfig, siteBackupResult);
       }
       

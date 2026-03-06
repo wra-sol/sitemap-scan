@@ -113,4 +113,58 @@ describe('SlackNotifier', () => {
     expect(summary).toContain('• *body.class*');
     expect(summary).toContain('• *section* added');
   });
+
+  it('throttles duplicate change notifications for a short window', async () => {
+    const fetchSpy = vi.fn(() => Promise.resolve(new Response('ok', { status: 200 })));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const kv = createMockKV();
+    const notifier = new SlackNotifier(kv, 'https://hooks.slack.com/services/test/webhook', 'https://example.workers.dev');
+    const siteConfig = {
+      id: 'test-site',
+      name: 'Test Site',
+      baseUrl: 'https://example.com',
+      urls: ['https://example.com/page'],
+      retentionDays: 7,
+      schedule: '0 2 * * *',
+      fetchOptions: { timeout: 1000, retries: 1, concurrency: 1 },
+      changeThreshold: { minChangeSize: 0, ignorePatterns: [] }
+    };
+    const backupResult = {
+      siteId: 'test-site',
+      siteName: 'Test Site',
+      totalUrls: 1,
+      successfulBackups: 1,
+      failedBackups: 0,
+      storedBackups: 1,
+      failedStores: 0,
+      changedUrls: ['https://example.com/page'],
+      executionTime: 5,
+      errors: [],
+      results: [
+        {
+          url: 'https://example.com/page',
+          success: true,
+          content: '<html>after</html>',
+          metadata: {
+            url: 'https://example.com/page',
+            timestamp: '2026-03-05T12:00:00.000Z',
+            hash: 'curr-hash',
+            normalizedHash: 'curr-hash',
+            status: 200,
+            contentType: 'text/html',
+            size: 18,
+            fetchTime: 5
+          }
+        }
+      ]
+    };
+
+    const first = await notifier.sendChangeNotificationWithDetails(siteConfig, backupResult);
+    const second = await notifier.sendChangeNotificationWithDetails(siteConfig, backupResult);
+
+    expect(first.delivered).toBe(true);
+    expect(second.throttled).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
 });

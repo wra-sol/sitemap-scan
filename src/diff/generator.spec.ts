@@ -33,17 +33,21 @@ describe('DiffGenerator', () => {
   it('reads URL history from metadata keys that match active storage', async () => {
     const url = 'https://example.com/page';
     const urlHash = (await ContentComparer.calculateHash(url)).substring(0, 16);
+    const today = new Date().toISOString().split('T')[0];
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterday = yesterdayDate.toISOString().split('T')[0];
     const kv = createMockKV({
-      [`meta:test-site:2026-03-05:${urlHash}`]: JSON.stringify({ hash: 'hash-b' }),
-      [`meta:test-site:2026-03-04:${urlHash}`]: JSON.stringify({ hash: 'hash-a' })
+      [`meta:test-site:${today}:${urlHash}`]: JSON.stringify({ hash: 'hash-b' }),
+      [`meta:test-site:${yesterday}:${urlHash}`]: JSON.stringify({ hash: 'hash-a' })
     });
 
     const generator = new DiffGenerator(kv);
     const history = await generator.getUrlHistory('test-site', url, 2);
 
     expect(history).toEqual([
-      { date: '2026-03-05', hash: 'hash-b', hasChanges: false },
-      { date: '2026-03-04', hash: 'hash-a', hasChanges: true }
+      { date: today, hash: 'hash-b', hasChanges: false },
+      { date: yesterday, hash: 'hash-a', hasChanges: true }
     ]);
   });
 

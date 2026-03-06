@@ -1,8 +1,19 @@
+import { readBackupContent } from '../runtime/content-storage';
 import { SiteConfig, SiteBackupResult } from '../types/site';
 import { ContentComparer } from '../diff/comparer';
 import { ContentChange, StyleChange, StructureChange } from '../types/diff';
 
+export interface SlackDeliveryResult {
+  attempted: boolean;
+  delivered: boolean;
+  throttled?: boolean;
+  channel: 'change' | 'error' | 'summary';
+  message?: string;
+  deliveredAt?: string;
+}
+
 export class SlackNotifier {
+  private static readonly CHANGE_NOTIFICATION_TTL_SECONDS = 15 * 60;
   private kv: KVNamespace;
   private defaultWebhook: string;
   private publicBaseUrl?: string;
@@ -17,12 +28,36 @@ export class SlackNotifier {
     siteConfig: SiteConfig,
     backupResult: SiteBackupResult
   ): Promise<boolean> {
+    const delivery = await this.sendChangeNotificationWithDetails(siteConfig, backupResult);
+    return delivery.delivered || Boolean(delivery.throttled);
+  }
+
+  async sendChangeNotificationWithDetails(
+    siteConfig: SiteConfig,
+    backupResult: SiteBackupResult
+  ): Promise<SlackDeliveryResult> {
     try {
       const webhookUrl = siteConfig.slackWebhook || this.defaultWebhook;
       
       if (!webhookUrl) {
         console.log(`No webhook configured for site ${siteConfig.id}, skipping Slack notification`);
-        return false;
+        return {
+          attempted: false,
+          delivered: false,
+          channel: 'change',
+          message: 'No Slack webhook configured.'
+        };
+      }
+
+      const throttleState = await this.shouldThrottleChangeNotification(siteConfig, backupResult);
+      if (throttleState.throttled) {
+        return {
+          attempted: false,
+          delivered: false,
+          throttled: true,
+          channel: 'change',
+          message: throttleState.message
+        };
       }
 
       const message = await this.buildChangeMessage(siteConfig, backupResult);
@@ -38,14 +73,31 @@ export class SlackNotifier {
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`Slack notification failed: ${response.status} - ${errorText}`);
-        return false;
+        return {
+          attempted: true,
+          delivered: false,
+          channel: 'change',
+          message: `Slack webhook returned HTTP ${response.status}.`
+        };
       }
 
+      await this.recordChangeNotification(siteConfig, backupResult);
+
       console.log(`Slack notification sent successfully for site ${siteConfig.id}`);
-      return true;
+      return {
+        attempted: true,
+        delivered: true,
+        channel: 'change',
+        deliveredAt: new Date().toISOString()
+      };
     } catch (error) {
       console.error(`Failed to send Slack notification for site ${siteConfig.id}:`, error);
-      return false;
+      return {
+        attempted: true,
+        delivered: false,
+        channel: 'change',
+        message: error instanceof Error ? error.message : String(error)
+      };
     }
   }
 
@@ -54,11 +106,25 @@ export class SlackNotifier {
     error: string,
     context?: any
   ): Promise<boolean> {
+    const delivery = await this.sendErrorNotificationWithDetails(siteConfig, error, context);
+    return delivery.delivered;
+  }
+
+  async sendErrorNotificationWithDetails(
+    siteConfig: SiteConfig,
+    error: string,
+    context?: any
+  ): Promise<SlackDeliveryResult> {
     try {
       const webhookUrl = siteConfig.slackWebhook || this.defaultWebhook;
       
       if (!webhookUrl) {
-        return false;
+        return {
+          attempted: false,
+          delivered: false,
+          channel: 'error',
+          message: 'No Slack webhook configured.'
+        };
       }
 
       const message = this.buildErrorMessage(siteConfig, error, context);
@@ -71,10 +137,29 @@ export class SlackNotifier {
         body: JSON.stringify(message)
       });
 
-      return response.ok;
+      if (!response.ok) {
+        return {
+          attempted: true,
+          delivered: false,
+          channel: 'error',
+          message: `Slack webhook returned HTTP ${response.status}.`
+        };
+      }
+
+      return {
+        attempted: true,
+        delivered: true,
+        channel: 'error',
+        deliveredAt: new Date().toISOString()
+      };
     } catch (error) {
       console.error(`Failed to send error notification for site ${siteConfig.id}:`, error);
-      return false;
+      return {
+        attempted: true,
+        delivered: false,
+        channel: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      };
     }
   }
 
@@ -119,14 +204,15 @@ export class SlackNotifier {
     const storedSuffix = backupResult.failedStores > 0 ? ` (store fails: ${backupResult.failedStores})` : '';
 
     // Only include detailed diffs for a few URLs to keep the Slack payload small.
-    const maxUrlsWithDiffs = 3;
+    const maxUrlsWithDiffs = backupResult.changedUrls.length > 10 ? 1 : 3;
     const urlsForDiffs = backupResult.changedUrls.slice(0, maxUrlsWithDiffs);
     const hasMoreChanges = backupResult.changedUrls.length > maxUrlsWithDiffs;
+    const digestMode = backupResult.changedUrls.length > 10;
 
     const blocks: any[] = [
       {
         type: 'header',
-        text: { type: 'plain_text', text: `Changes detected: ${siteConfig.name}`, emoji: true }
+        text: { type: 'plain_text', text: `${digestMode ? 'Digest' : 'Changes detected'}: ${siteConfig.name}`, emoji: true }
       },
       {
         type: 'section',
@@ -137,7 +223,8 @@ export class SlackNotifier {
             `*Changed URLs:* ${backupResult.changedUrls.length}\n` +
             `*Processed:* ${processed}/${backupResult.totalUrls}\n` +
             `*Stored:* ${backupResult.storedBackups}/${backupResult.successfulBackups}${storedSuffix}\n` +
-            `*Time:* ${executionTimeSeconds}s`
+            `*Time:* ${executionTimeSeconds}s\n` +
+            `*Alert Mode:* ${digestMode ? 'Digest' : 'Detailed'}`
         }
       }
     ];
@@ -349,8 +436,7 @@ export class SlackNotifier {
       return `_Previous metadata missing; cannot generate diff summary._`;
     }
 
-    const prevContentKey = `backup:${siteId}:${prevDate}:${urlHash}`;
-    const prevContent = await this.kv.get(prevContentKey, 'text');
+    const prevContent = await readBackupContent(this.kv, siteId, prevDate, urlHash, prevMeta);
 
     if (!prevContent) {
       return `_Previous content not found (possibly expired due to retention)._`;
@@ -510,6 +596,49 @@ export class SlackNotifier {
     return siteConfig.id.includes('prod') || siteConfig.id.includes('production') 
       ? '#backup-alerts-prod' 
       : '#backup-alerts';
+  }
+
+  private buildNotificationSignature(siteConfig: SiteConfig, backupResult: SiteBackupResult): string {
+    const changedUrls = [...backupResult.changedUrls].sort().join('|');
+    return [
+      siteConfig.id,
+      backupResult.totalUrls,
+      backupResult.changedUrls.length,
+      changedUrls
+    ].join(':');
+  }
+
+  private async shouldThrottleChangeNotification(
+    siteConfig: SiteConfig,
+    backupResult: SiteBackupResult
+  ): Promise<{ throttled: boolean; message?: string }> {
+    const signatureKey = await this.getChangeNotificationKey(siteConfig, backupResult);
+    const existing = await this.kv.get(signatureKey);
+
+    if (!existing) {
+      return { throttled: false };
+    }
+
+    return {
+      throttled: true,
+      message: 'An equivalent Slack change alert was already sent recently.'
+    };
+  }
+
+  private async recordChangeNotification(siteConfig: SiteConfig, backupResult: SiteBackupResult): Promise<void> {
+    const signatureKey = await this.getChangeNotificationKey(siteConfig, backupResult);
+    await this.kv.put(signatureKey, new Date().toISOString(), {
+      expirationTtl: SlackNotifier.CHANGE_NOTIFICATION_TTL_SECONDS
+    });
+  }
+
+  private async getChangeNotificationKey(
+    siteConfig: SiteConfig,
+    backupResult: SiteBackupResult
+  ): Promise<string> {
+    const signature = this.buildNotificationSignature(siteConfig, backupResult);
+    const hash = await ContentComparer.calculateHash(signature);
+    return `slack_alert:${siteConfig.id}:${hash.substring(0, 16)}`;
   }
 
   async sendTestNotification(webhookUrl?: string): Promise<boolean> {

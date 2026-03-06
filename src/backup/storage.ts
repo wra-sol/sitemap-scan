@@ -1,4 +1,5 @@
 import { BackupMetadata } from '../types/site';
+import { decodeBackupContent, encodeBackupContent } from '../runtime/content-storage';
 
 export class StorageManager {
   private kv: KVNamespace;
@@ -18,13 +19,16 @@ export class StorageManager {
       const contentKey = `backup:${siteId}:${date}:${urlHash}`;
       const metadataKey = `meta:${siteId}:${date}:${urlHash}`;
       const latestKey = `latest:${siteId}:${urlHash}`;
-
-      const compressedContent = await this.compressContent(content);
+      const encoded = await encodeBackupContent(content);
+      const metadataWithEncoding: BackupMetadata = {
+        ...metadata,
+        contentEncoding: encoded.encoding
+      };
 
       await Promise.all([
-        this.kv.put(contentKey, compressedContent),
-        this.kv.put(metadataKey, JSON.stringify(metadata)),
-        this.kv.put(latestKey, JSON.stringify(metadata))
+        this.kv.put(contentKey, encoded.storedContent),
+        this.kv.put(metadataKey, JSON.stringify(metadataWithEncoding)),
+        this.kv.put(latestKey, JSON.stringify(metadataWithEncoding))
       ]);
 
       return true;
@@ -52,8 +56,8 @@ export class StorageManager {
         return null;
       }
 
-      const decompressedContent = await this.decompressContent(contentData);
       const metadata = JSON.parse(metadataData) as BackupMetadata;
+      const decompressedContent = await decodeBackupContent(contentData, metadata.contentEncoding);
 
       return {
         content: decompressedContent,
@@ -237,94 +241,6 @@ export class StorageManager {
       console.error(`Failed to list URLs for ${siteId}:`, error);
       return [];
     }
-  }
-
-  private async compressContent(content: string): Promise<string> {
-    try {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(content);
-      const compressed = await this.gzipCompress(data);
-      const decoder = new TextDecoder();
-      return decoder.decode(compressed);
-    } catch (error) {
-      console.error('Failed to compress content:', error);
-      return content;
-    }
-  }
-
-  private async decompressContent(compressedContent: string): Promise<string> {
-    try {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(compressedContent);
-      const decompressed = await this.gzipDecompress(data);
-      const decoder = new TextDecoder();
-      return decoder.decode(decompressed);
-    } catch (error) {
-      console.error('Failed to decompress content:', error);
-      return compressedContent;
-    }
-  }
-
-  private async gzipCompress(data: Uint8Array): Promise<Uint8Array> {
-    const stream = new CompressionStream('gzip');
-    const writer = stream.writable.getWriter();
-    const reader = stream.readable.getReader();
-
-    writer.write(data);
-    writer.close();
-
-    const chunks: Uint8Array[] = [];
-    let done = false;
-
-    while (!done) {
-      const { value, done: readerDone } = await reader.read();
-      done = readerDone;
-      if (value) {
-        chunks.push(value);
-      }
-    }
-
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const result = new Uint8Array(totalLength);
-    let offset = 0;
-
-    for (const chunk of chunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    return result;
-  }
-
-  private async gzipDecompress(data: Uint8Array): Promise<Uint8Array> {
-    const stream = new DecompressionStream('gzip');
-    const writer = stream.writable.getWriter();
-    const reader = stream.readable.getReader();
-
-    writer.write(data);
-    writer.close();
-
-    const chunks: Uint8Array[] = [];
-    let done = false;
-
-    while (!done) {
-      const { value, done: readerDone } = await reader.read();
-      done = readerDone;
-      if (value) {
-        chunks.push(value);
-      }
-    }
-
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const result = new Uint8Array(totalLength);
-    let offset = 0;
-
-    for (const chunk of chunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    return result;
   }
 
   async getUrlHash(url: string): Promise<string> {

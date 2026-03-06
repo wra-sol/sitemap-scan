@@ -3,7 +3,7 @@ export interface ApiAuthEnv {
 }
 
 const LOCAL_DEV_HOSTS = new Set(['localhost', '127.0.0.1']);
-const PUBLIC_PATHS = new Set(['/diff/viewer', '/backup/viewer']);
+const PUBLIC_PATHS = new Set(['/', '/app', '/diff/viewer', '/backup/viewer']);
 
 function jsonResponse(body: Record<string, string>, status: number, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {

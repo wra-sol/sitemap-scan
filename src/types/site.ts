@@ -27,6 +27,7 @@ export type PublicSiteConfig = Omit<SiteConfig, 'slackWebhook'> & {
 
 export interface BackupMetadata {
   url: string;
+  finalUrl?: string;
   timestamp: string;
   hash: string;
   /**
@@ -36,6 +37,7 @@ export interface BackupMetadata {
   normalizedHash?: string;
   status: number;
   contentType: string;
+  contentEncoding?: 'identity' | 'gzip-base64';
   etag?: string;
   size: number;
   fetchTime: number;

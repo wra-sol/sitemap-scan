@@ -1,6 +1,6 @@
 import { BackupFetcher } from './backup/fetcher';
-import { SchedulerDispatcher } from './scheduler/dispatcher';
 import { requireApiAuth } from './http/auth';
+import { serveOperatorConsole } from './http/operator-console';
 import { SiteManager } from './sites/manager';
 import { SlackNotifier } from './slack/notifier';
 import { matchesCronExpression } from './scheduler/cron';
@@ -9,6 +9,10 @@ import { SiteRegistry } from './sites/registry';
 import { SiteConfig, SiteBackupResult } from './types/site';
 import { DiffGenerator } from './diff/generator';
 import { ContentComparer } from './diff/comparer';
+import { readBackupContent } from './runtime/content-storage';
+import { executeSiteBackupRun } from './runtime/site-execution';
+import { SiteDataService } from './runtime/site-data';
+import { RunStore } from './runtime/run-store';
 
 export interface Env {
   BACKUP_KV: KVNamespace;
@@ -42,71 +46,35 @@ export default {
         return;
       }
 
-      const fetcher = new BackupFetcher(env.BACKUP_KV);
-      
       let successful = 0;
       let failed = 0;
+      const summaryResults: Array<{ siteConfig: SiteConfig; backupResult: SiteBackupResult }> = [];
       
       for (const site of dueSites) {
         try {
           console.log(`Backing up: ${site.name} (${site.id})`);
-          
-          // Use batched backup with continuation support
-          // Batch size 30 is the proven safe max; we do up to 2 batches per cron to speed large sites.
-          let result = await fetcher.performSiteBackup(site, {
+
+          const execution = await executeSiteBackupRun(env, site, {
+            trigger: 'scheduled',
             continueFromLast: true,
             batchSize: 30
           });
 
-          let totalSuccessful = result.successfulBackups;
-          let totalFailed = result.failedBackups;
-          let totalStored = result.storedBackups;
-          let totalStoreFailed = result.failedStores;
-          let allChangedUrls = [...result.changedUrls];
-
-          let batchCount = 1;
-          const maxBatchesPerRun = 2; // 2 batches per site per cron (~60 URLs per 10 min)
-
-          while (result.hasMore && batchCount < maxBatchesPerRun) {
-            console.log(`${site.name}: Continuing batch ${batchCount + 1}, progress: ${result.progress.percentComplete}%`);
-            result = await fetcher.performSiteBackup(site, { continueFromLast: true, batchSize: 30 });
-            totalSuccessful += result.successfulBackups;
-            totalFailed += result.failedBackups;
-            totalStored += result.storedBackups;
-            totalStoreFailed += result.failedStores;
-            allChangedUrls.push(...result.changedUrls);
-            batchCount++;
-          }
-          
-          if (result.hasMore) {
-            console.log(`${site.name}: Batch limit reached, will continue in next cron run. Progress: ${result.progress.percentComplete}%`);
-          }
-          
-          if (totalFailed === 0) {
-            successful++;
-          } else {
+          if (execution.runRecord.status === 'failed' || execution.runRecord.status === 'partial') {
             failed++;
+          } else {
+            successful++;
           }
-          
-          // Send Slack notification if there are changes
-          if (allChangedUrls.length > 0) {
-            const siteBackupResult: SiteBackupResult = {
-              siteId: site.id,
-              siteName: site.name,
-              totalUrls: result.totalUrls,
-              successfulBackups: totalSuccessful,
-              failedBackups: totalFailed,
-              storedBackups: totalStored,
-              failedStores: totalStoreFailed,
-              changedUrls: allChangedUrls,
-              executionTime: result.executionTime,
-              errors: result.errors,
-              results: result.results
-            };
-            await slackNotifier.sendChangeNotification(site, siteBackupResult);
-          }
-          
-          console.log(`${site.name}: ${totalSuccessful}/${result.progress.completed} URLs processed, ${allChangedUrls.length} changes, ${result.progress.percentComplete}% complete`);
+
+          summaryResults.push({
+            siteConfig: site,
+            backupResult: execution.siteBackupResult
+          });
+
+          console.log(
+            `${site.name}: ${execution.runRecord.processedUrls}/${execution.siteBackupResult.totalUrls} URLs processed, ` +
+            `${execution.siteBackupResult.changedUrls.length} changes, status ${execution.runRecord.status}`
+          );
         } catch (error) {
           console.error(`Backup failed for ${site.id}:`, error);
           failed++;
@@ -118,6 +86,13 @@ export default {
       }
       
       console.log(`Backup complete: ${successful} sites successful, ${failed} failed`);
+
+      if (summaryResults.length > 1) {
+        await slackNotifier.sendSummaryNotification(
+          new Date().toISOString().split('T')[0],
+          summaryResults
+        );
+      }
 
     } catch (error) {
       console.error('Scheduled event processing failed:', error);
@@ -160,7 +135,7 @@ export default {
           return await handlePutRequest(request, url, siteManager);
         
         case 'DELETE':
-          return await handleDeleteRequest(url, siteManager);
+          return await handleDeleteRequest(url, env.BACKUP_KV);
         
         default:
           return new Response('Method not allowed', { status: 405 });
@@ -188,17 +163,24 @@ async function handleGetRequest(
   const siteId = url.searchParams.get('siteId');
 
   switch (path) {
+    case '/':
+    case '/app':
+      return serveOperatorConsole();
+
     case '/api/sites':
       if (siteId) {
         const siteConfig = await siteManager.getSiteConfig(siteId);
         return siteConfig 
-          ? jsonResponse(toPublicSiteConfig(siteConfig))
+          ? jsonResponse(url.searchParams.get('includeSecrets') === '1' ? siteConfig : toPublicSiteConfig(siteConfig))
           : new Response('Site not found', { status: 404 });
       } else {
         const allSites = await siteManager.getAllSiteConfigs();
         return jsonResponse(allSites.map(toPublicSiteConfig));
       }
     
+    case '/api/sites/overview':
+      return jsonResponse(await buildSitesOverview(siteManager, siteRegistry, env.BACKUP_KV));
+
     case '/api/sites/health':
       if (siteId) {
         const health = await siteRegistry.validateSiteHealth(siteId);
@@ -208,6 +190,9 @@ async function handleGetRequest(
         return new Response(JSON.stringify(allHealth));
       }
     
+    case '/api/runs':
+      return jsonResponse(await handleRecentRuns(url, env.BACKUP_KV));
+
     case '/api/sites/metrics':
       if (!siteId) {
         return new Response('siteId parameter required', { status: 400 });
@@ -223,9 +208,7 @@ async function handleGetRequest(
       return await handleGetSiteDates(siteId, env.BACKUP_KV);
     
     case '/api/status':
-      const dispatcher = new SchedulerDispatcher(env.BACKUP_KV);
-      const status = await dispatcher.getSchedulerStatus();
-      return jsonResponse(status);
+      return jsonResponse(await buildSchedulerStatus(siteManager, env.BACKUP_KV));
     
     case '/api/test':
       const testResult = await siteRegistry.validateAllSites();
@@ -296,10 +279,7 @@ async function handlePostRequest(
       if (!saved) {
         return new Response('Failed to save site configuration', { status: 500 });
       }
-      
-      const dispatcher = new SchedulerDispatcher(env.BACKUP_KV);
-      await dispatcher.addSiteToScheduler(body);
-      
+
       return jsonResponse({ success: true, siteId: body.id }, 201);
     
     case '/api/slack/test':
@@ -319,35 +299,17 @@ async function handlePostRequest(
       if (!siteConfig) {
         return new Response('Site not found', { status: 404 });
       }
-      
-      const fetcher = new BackupFetcher(env.BACKUP_KV);
-      const backupResult = await fetcher.performSiteBackup(siteConfig, {
+
+      const execution = await executeSiteBackupRun(env, siteConfig, {
+        trigger: 'manual',
         batchSize: triggerBody.batchSize,
         batchOffset: triggerBody.batchOffset,
         continueFromLast: triggerBody.continueFromLast ?? true
       });
-      
-      const siteBackupResult: SiteBackupResult = {
-        siteId: siteConfig.id,
-        siteName: siteConfig.name,
-        totalUrls: backupResult.totalUrls,
-        successfulBackups: backupResult.successfulBackups,
-        failedBackups: backupResult.failedBackups,
-        storedBackups: backupResult.storedBackups,
-        failedStores: backupResult.failedStores,
-        changedUrls: backupResult.changedUrls,
-        executionTime: backupResult.executionTime,
-        errors: backupResult.errors,
-        results: backupResult.results
-      };
-      
-      if (backupResult.changedUrls.length > 0) {
-        await slackNotifier.sendChangeNotification(siteConfig, siteBackupResult);
-      }
-      
+
       // Strip content from results to avoid JSON parsing issues with control characters
       // and to reduce response size
-      const sanitizedResults = backupResult.results.map(r => ({
+      const sanitizedResults = execution.siteBackupResult.results.map(r => ({
         url: r.url,
         success: r.success,
         error: r.error,
@@ -356,7 +318,10 @@ async function handlePostRequest(
       }));
       
       const responsePayload = {
-        ...backupResult,
+        ...execution.siteBackupResult,
+        hasMore: execution.runRecord.hasMore,
+        progress: execution.runRecord.progress,
+        run: execution.runRecord,
         results: sanitizedResults
       };
       
@@ -418,7 +383,7 @@ async function handlePutRequest(
 
 async function handleDeleteRequest(
   url: URL,
-  siteManager: SiteManager
+  kv: KVNamespace
 ): Promise<Response> {
   const siteId = url.searchParams.get('siteId');
   
@@ -426,10 +391,64 @@ async function handleDeleteRequest(
     return new Response('siteId parameter required', { status: 400 });
   }
   
-  const deleted = await siteManager.deleteSiteConfig(siteId);
-  return deleted 
-    ? new Response(JSON.stringify({ success: true }))
-    : new Response('Failed to delete site configuration', { status: 500 });
+  const siteDataService = new SiteDataService(kv);
+  const deletedKeys = await siteDataService.deleteSiteData(siteId);
+  return jsonResponse({ success: true, deletedKeys });
+}
+
+async function buildSitesOverview(
+  siteManager: SiteManager,
+  siteRegistry: SiteRegistry,
+  kv: KVNamespace
+): Promise<Array<Record<string, unknown>>> {
+  const sites = await siteManager.getAllSiteConfigs();
+  const runStore = new RunStore(kv);
+  const fetcher = new BackupFetcher(kv);
+
+  return Promise.all(sites.map(async (site) => {
+    const [health, metrics, latestRun, progress] = await Promise.all([
+      siteRegistry.validateSiteHealth(site.id),
+      siteRegistry.getSiteMetrics(site.id, 7),
+      runStore.getLatestRun(site.id),
+      fetcher.getBatchProgress(site.id)
+    ]);
+
+    return {
+      ...toPublicSiteConfig(site),
+      health,
+      metrics,
+      latestRun,
+      progress,
+      latestSummary: latestRun?.summary || null
+    };
+  }));
+}
+
+async function handleRecentRuns(url: URL, kv: KVNamespace): Promise<unknown> {
+  const runStore = new RunStore(kv);
+  const siteId = url.searchParams.get('siteId') || undefined;
+  const limit = Math.min(
+    Number.parseInt(url.searchParams.get('limit') || '25', 10) || 25,
+    100
+  );
+
+  return runStore.listRecentRuns(limit, siteId);
+}
+
+async function buildSchedulerStatus(siteManager: SiteManager, kv: KVNamespace): Promise<unknown> {
+  const sites = await siteManager.getAllSiteConfigs();
+  const now = new Date();
+  const runStore = new RunStore(kv);
+
+  const dueSites = sites.filter((site) => matchesCronExpression(site.schedule, now));
+  const latestRuns = await Promise.all(sites.map((site) => runStore.getLatestRun(site.id)));
+
+  return {
+    totalSites: sites.length,
+    dueSites: dueSites.map((site) => site.id),
+    schedules: [...new Set(sites.map((site) => site.schedule))].sort(),
+    latestRuns: latestRuns.filter((run): run is NonNullable<typeof run> => run !== null)
+  };
 }
 
 async function handleGetSiteDates(siteId: string, kv: KVNamespace): Promise<Response> {
@@ -525,8 +544,8 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
               const backupPrevKey = `backup:${siteId}:${previousDate}:${urlData.urlHash}`;
               const backupCurrKey = `backup:${siteId}:${date}:${urlData.urlHash}`;
               
-              const prevBackupContent = await kv.get(backupPrevKey, 'text');
-              const currBackupContent = await kv.get(backupCurrKey, 'text');
+              const prevBackupContent = await readBackupContent(kv, siteId, previousDate, urlData.urlHash, prevData);
+              const currBackupContent = await readBackupContent(kv, siteId, date, urlData.urlHash, currData);
               
               if (prevBackupContent && currBackupContent) {
                 const diff = await diffGenerator.generateDiff(
@@ -611,10 +630,8 @@ async function handleUrlHistoryRequest(path: string, kv: KVNamespace): Promise<R
 
     const prevData = JSON.parse(previousMetaData);
     
-    const prevBackupKey = `backup:${siteId}:${previousDate}:${urlHash}`;
-    const currBackupKey = `backup:${siteId}:${date}:${urlHash}`;
-    const prevBackupContent = await kv.get(prevBackupKey, 'text');
-    const currBackupContent = await kv.get(currBackupKey, 'text');
+    const prevBackupContent = await readBackupContent(kv, siteId, previousDate, urlHash, prevData);
+    const currBackupContent = await readBackupContent(kv, siteId, date, urlHash, currData);
 
     if (!prevBackupContent || !currBackupContent) {
       return new Response('Backup content not found', { status: 404 });
@@ -663,8 +680,10 @@ async function handlePreviewRequest(path: string, kv: KVNamespace): Promise<Resp
     }
 
     const [, siteId, date, urlHash] = match;
-    const backupKey = `backup:${siteId}:${date}:${urlHash}`;
-    const content = await kv.get(backupKey, 'text');
+    const metaKey = `meta:${siteId}:${date}:${urlHash}`;
+    const metadataRaw = await kv.get(metaKey, 'text');
+    const metadata = metadataRaw ? JSON.parse(metadataRaw) : null;
+    const content = await readBackupContent(kv, siteId, date, urlHash, metadata);
 
     if (!content) {
       return new Response('Backup not found', { status: 404 });
@@ -858,8 +877,10 @@ async function handleBackupHistory(siteId: string, urlHash: string, kv: KVNamesp
 // Handler for getting raw HTML source of a backup
 async function handleBackupSource(siteId: string, date: string, urlHash: string, kv: KVNamespace): Promise<Response> {
   try {
-    const backupKey = `backup:${siteId}:${date}:${urlHash}`;
-    const content = await kv.get(backupKey, 'text');
+    const metaKey = `meta:${siteId}:${date}:${urlHash}`;
+    const metadataRaw = await kv.get(metaKey, 'text');
+    const metadata = metadataRaw ? JSON.parse(metadataRaw) : null;
+    const content = await readBackupContent(kv, siteId, date, urlHash, metadata);
 
     if (!content) {
       return new Response('Backup not found', { status: 404 });
@@ -1823,6 +1844,9 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
     .header { background: white; padding: 15px 20px; border-bottom: 1px solid #e5e5e5; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .header h1 { font-size: 20px; margin-bottom: 10px; color: #1f2937; }
     .header-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .auth-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 20px; background: #111827; color: white; }
+    .auth-bar input { flex: 1 1 280px; min-width: 220px; background: #1f2937; color: white; border-color: #374151; }
+    .auth-status { color: #cbd5e1; font-size: 13px; }
     .nav-links { margin-left: auto; display: flex; gap: 10px; }
     .nav-links a { color: #0066cc; text-decoration: none; font-size: 14px; padding: 6px 12px; border-radius: 4px; }
     .nav-links a:hover { background: #f0f7ff; }
@@ -1891,9 +1915,17 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
         <option value="">Select a site...</option>
       </select>
       <div class="nav-links">
+        <a href="/app">Operator Console</a>
         <a href="/diff/viewer">Diff Viewer</a>
       </div>
     </div>
+  </div>
+  <div class="auth-bar">
+    <strong>Admin API Token</strong>
+    <input id="tokenInput" type="password" placeholder="Paste ADMIN_API_TOKEN for secured API requests" />
+    <button id="saveTokenBtn">Save Token</button>
+    <button id="clearTokenBtn">Clear</button>
+    <span id="authStatus" class="auth-status"></span>
   </div>
   
   <div class="main-content">
@@ -1976,6 +2008,8 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
   <script>
     const baseUrl = window.location.origin;
     const PAGE_SIZE = 100;
+    const tokenStorageKey = 'backupMonitorAdminToken';
+    let adminToken = localStorage.getItem(tokenStorageKey) || '';
     
     let currentUrls = [];
     let totalUrls = 0;
@@ -1988,6 +2022,59 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
     let currentView = 'rendered';
     let backupHistory = [];
     let searchTimeout = null;
+    const tokenInput = document.getElementById('tokenInput');
+    tokenInput.value = adminToken;
+
+    function isLocalhost() {
+      return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    }
+
+    function updateAuthStatus(message) {
+      const node = document.getElementById('authStatus');
+      if (message) {
+        node.textContent = message;
+        return;
+      }
+      if (adminToken) {
+        node.textContent = 'Token saved in this browser.';
+      } else if (isLocalhost()) {
+        node.textContent = 'Local development detected; token is optional.';
+      } else {
+        node.textContent = 'Token required for secured deployments.';
+      }
+    }
+
+    function getAuthHeaders() {
+      if (!adminToken) return {};
+      return { Authorization: 'Bearer ' + adminToken };
+    }
+
+    async function fetchJson(path) {
+      const response = await fetch(baseUrl + path, {
+        headers: getAuthHeaders()
+      });
+
+      if (response.status === 401 || response.status === 503) {
+        let message = 'API authentication is required.';
+        try {
+          const data = await response.json();
+          if (data && data.error) message = data.error;
+        } catch {}
+        updateAuthStatus(message);
+        throw new Error(message);
+      }
+
+      if (!response.ok) {
+        let message = 'Request failed.';
+        try {
+          const data = await response.json();
+          if (data && data.error) message = data.error;
+        } catch {}
+        throw new Error(message);
+      }
+
+      return response.json();
+    }
 
     // Initialize event listeners
     document.getElementById('siteSelect').addEventListener('change', () => { resetPagination(); loadUrls(); });
@@ -2000,6 +2087,23 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
     document.getElementById('viewSource').addEventListener('click', () => setView('source'));
     document.getElementById('prevBtn').addEventListener('click', loadPrevPage);
     document.getElementById('nextBtn').addEventListener('click', loadNextPage);
+    document.getElementById('saveTokenBtn').addEventListener('click', () => {
+      adminToken = tokenInput.value.trim();
+      if (adminToken) {
+        localStorage.setItem(tokenStorageKey, adminToken);
+      }
+      updateAuthStatus();
+      loadSites();
+      if (document.getElementById('siteSelect').value) {
+        loadUrls();
+      }
+    });
+    document.getElementById('clearTokenBtn').addEventListener('click', () => {
+      adminToken = '';
+      tokenInput.value = '';
+      localStorage.removeItem(tokenStorageKey);
+      updateAuthStatus();
+    });
 
     // Load sites on page load
     loadSites();
@@ -2040,8 +2144,7 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
 
     async function loadSites() {
       try {
-        const response = await fetch(baseUrl + '/api/sites');
-        const sites = await response.json();
+        const sites = await fetchJson('/api/sites');
         const select = document.getElementById('siteSelect');
         select.innerHTML = '<option value="">Select a site...</option>';
         for (const site of sites) {
@@ -2080,10 +2183,7 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
         apiUrl += '&order=' + order;
         if (search) apiUrl += '&search=' + encodeURIComponent(search);
         
-        const response = await fetch(apiUrl);
-        if (!response.ok) throw new Error('Failed to load URLs');
-        
-        const data = await response.json();
+        const data = await fetchJson(apiUrl.replace(baseUrl, ''));
         currentUrls = data.urls;
         totalUrls = data.total;
         nextCursor = data.nextCursor;
@@ -2194,9 +2294,7 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
       showLoading(true);
 
       try {
-        const response = await fetch(baseUrl + '/api/sites/' + siteId + '/backup/' + urlHash + '/history');
-        if (!response.ok) throw new Error('Failed to load backup history');
-        backupHistory = await response.json();
+        backupHistory = await fetchJson('/api/sites/' + siteId + '/backup/' + urlHash + '/history');
 
         const dateSelect = document.getElementById('dateSelect');
         dateSelect.innerHTML = backupHistory.map((h, i) => {
@@ -2245,15 +2343,21 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
     }
 
     async function loadRenderedPreview(siteId, date, urlHash) {
-      const previewUrl = baseUrl + '/api/sites/' + siteId + '/preview/' + date + '/' + urlHash;
-      document.getElementById('previewFrame').src = previewUrl;
+      const previewUrl = '/api/sites/' + siteId + '/preview/' + date + '/' + urlHash;
+      const response = await fetch(baseUrl + previewUrl, {
+        headers: getAuthHeaders()
+      });
+      if (!response.ok) throw new Error('Failed to load preview');
+      document.getElementById('previewFrame').srcdoc = await response.text();
       document.getElementById('previewFrame').classList.remove('hidden');
       document.getElementById('sourceView').classList.remove('active');
     }
 
     async function loadSourceView(siteId, date, urlHash) {
       try {
-        const response = await fetch(baseUrl + '/api/sites/' + siteId + '/backup/' + date + '/' + urlHash + '/source');
+        const response = await fetch(baseUrl + '/api/sites/' + siteId + '/backup/' + date + '/' + urlHash + '/source', {
+          headers: getAuthHeaders()
+        });
         if (!response.ok) throw new Error('Failed to load source');
         const source = await response.text();
         document.getElementById('sourceView').textContent = source;
@@ -2322,6 +2426,8 @@ async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     }
+
+    updateAuthStatus();
   </script>
 </body>
 </html>`;
