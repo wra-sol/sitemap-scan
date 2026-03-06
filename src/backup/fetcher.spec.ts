@@ -17,18 +17,28 @@ function createMockKV(initial: Record<string, string> = {}): KVNamespace {
     list: vi.fn((opts?: { prefix?: string; limit?: number; cursor?: string }) => {
       const prefix = opts?.prefix ?? '';
       const limit = opts?.limit ?? 1000;
-      const keys = Array.from(store.keys())
+      const offset = Number.parseInt(opts?.cursor ?? '0', 10);
+      const matchingKeys = Array.from(store.keys())
         .filter((name) => name.startsWith(prefix))
-        .slice(0, limit)
+        .sort();
+      const keys = matchingKeys
+        .slice(offset, offset + limit)
         .map((name) => ({ name, expiration: undefined, metadata: undefined }));
+      const nextOffset = offset + keys.length;
 
       return Promise.resolve({
         keys,
-        list_complete: true,
-        cursor: undefined
+        list_complete: nextOffset >= matchingKeys.length,
+        cursor: nextOffset < matchingKeys.length ? String(nextOffset) : undefined
       });
     })
   } as unknown as KVNamespace;
+}
+
+function formatDateOffset(daysAgo: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return date.toISOString().split('T')[0];
 }
 
 function minimalSiteConfig(overrides: Partial<SiteConfig> = {}): SiteConfig {
@@ -386,6 +396,181 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
       expect(kv.delete).toHaveBeenCalledWith('full_scan:test-site');
       expect(kv.delete).toHaveBeenCalledWith('sitemap_listener_cursor:test-site');
       expect(kv.list).toHaveBeenCalledWith(expect.objectContaining({ prefix: 'urls_cache:test-site:' }));
+    });
+  });
+
+  describe('fetch behavior', () => {
+    it('tracks manual redirects and stores the final URL metadata', async () => {
+      const requestOptions: Array<Record<string, unknown> | undefined> = [];
+      const fetchSpy = vi.fn((input: string | Request | URL, init?: Record<string, unknown>) => {
+        const url = typeof input === 'string' ? input : (input as Request).url ?? String(input);
+        requestOptions.push(init);
+
+        if (url === 'https://example.com/start') {
+          return Promise.resolve({
+            ok: false,
+            status: 302,
+            statusText: 'Found',
+            url,
+            headers: new Headers({ location: '/final' }),
+            text: () => Promise.resolve('')
+          } as unknown as Response);
+        }
+
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          url,
+          headers: new Headers({ 'content-type': 'text/html' }),
+          text: () => Promise.resolve('<html><body>redirected</body></html>')
+        } as unknown as Response);
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const config = minimalSiteConfig({
+        sitemapUrl: undefined,
+        urls: ['https://example.com/start']
+      });
+
+      const result = await fetcher.performSiteBackup(config, { continueFromLast: false, batchSize: 25 });
+
+      expect(result.successfulBackups).toBe(1);
+      expect(result.results[0].metadata).toMatchObject({
+        url: 'https://example.com/start',
+        finalUrl: 'https://example.com/final',
+        redirectCount: 1
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(requestOptions[0]).toMatchObject({ redirect: 'manual' });
+      expect(requestOptions[1]).toMatchObject({ redirect: 'manual' });
+    });
+  });
+
+  describe('cleanupOldBackups', () => {
+    it('deletes backup pages across KV list pagination', async () => {
+      const oldDate = formatDateOffset(14);
+      const recentDate = formatDateOffset(1);
+      const initial: Record<string, string> = {};
+
+      for (let i = 0; i < 1005; i++) {
+        const key = `backup:test-site:${oldDate}:page-${i}`;
+        initial[key] = `old-${i}`;
+        initial[key.replace('backup:', 'meta:')] = `meta-old-${i}`;
+      }
+
+      initial[`backup:test-site:${recentDate}:page-recent`] = 'recent';
+      initial[`meta:test-site:${recentDate}:page-recent`] = 'meta-recent';
+
+      const kv = createMockKV(initial);
+      const fetcher = new BackupFetcher(kv);
+      const cleanupOldBackups = (fetcher as unknown as Record<string, Function>).cleanupOldBackups.bind(fetcher);
+
+      await cleanupOldBackups('test-site', 7);
+
+      expect(kv.list).toHaveBeenCalledTimes(2);
+      expect(await kv.get(`backup:test-site:${oldDate}:page-1004`)).toBeNull();
+      expect(await kv.get(`meta:test-site:${oldDate}:page-1004`)).toBeNull();
+      expect(await kv.get(`backup:test-site:${recentDate}:page-recent`)).toBe('recent');
+      expect(await kv.get(`meta:test-site:${recentDate}:page-recent`)).toBe('meta-recent');
+    });
+  });
+
+  describe('cache maintenance', () => {
+    it('removes stale URL cache chunks when a cached sitemap shrinks', async () => {
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const saveUrlsCache = (fetcher as unknown as Record<string, Function>).saveUrlsCache.bind(fetcher);
+      const loadUrlsCache = (fetcher as unknown as Record<string, Function>).loadUrlsCache.bind(fetcher);
+      const date = '2026-03-05';
+
+      await saveUrlsCache(
+        'test-site',
+        date,
+        Array.from({ length: 2001 }, (_, i) => `https://example.com/page-${i}`)
+      );
+      expect(await kv.get(`urls_cache:test-site:${date}:chunk:1`)).not.toBeNull();
+
+      await saveUrlsCache('test-site', date, ['https://example.com/only']);
+
+      expect(await kv.get(`urls_cache:test-site:${date}:chunk:1`)).toBeNull();
+      expect(await loadUrlsCache('test-site', date)).toEqual(['https://example.com/only']);
+    });
+
+    it('removes stale sitemap snapshot chunks when the monitored sitemap shrinks', async () => {
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const saveSitemapSnapshot = (fetcher as unknown as Record<string, Function>).saveSitemapSnapshot.bind(fetcher);
+      const loadSitemapSnapshotState = (fetcher as unknown as Record<string, Function>).loadSitemapSnapshotState.bind(fetcher);
+
+      await saveSitemapSnapshot(
+        'test-site',
+        Array.from({ length: 2001 }, (_, i) => `https://example.com/page-${i}`)
+      );
+      expect(await kv.get('sitemap_snapshot:test-site:chunk:1')).not.toBeNull();
+
+      await saveSitemapSnapshot('test-site', ['https://example.com/only']);
+
+      expect(await kv.get('sitemap_snapshot:test-site:chunk:1')).toBeNull();
+      expect(await loadSitemapSnapshotState('test-site')).toMatchObject({
+        urls: ['https://example.com/only'],
+        totalUrls: 1
+      });
+    });
+  });
+
+  describe('storage efficiency', () => {
+    it('reuses latest metadata lookups for change detection and storage', async () => {
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv);
+      const getUrlHash = (fetcher as unknown as Record<string, Function>).getUrlHash.bind(fetcher);
+      const page1 = 'https://example.com/page1';
+      const page2 = 'https://example.com/page2';
+      const page1Hash = await getUrlHash(page1);
+      const page2Hash = await getUrlHash(page2);
+
+      await kv.put(
+        `latest:test-site:${page1Hash}`,
+        JSON.stringify({ hash: 'old-1', normalizedHash: 'old-1' })
+      );
+      await kv.put(
+        `latest:test-site:${page2Hash}`,
+        JSON.stringify({ hash: 'old-2', normalizedHash: 'old-2' })
+      );
+
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: string | Request | URL) => {
+          const url = typeof input === 'string' ? input : (input as Request).url ?? String(input);
+          return Promise.resolve(
+            new Response(`<html><body>${url}</body></html>`, {
+              status: 200,
+              headers: new Headers({ 'Content-Type': 'text/html' })
+            })
+          );
+        })
+      );
+
+      const result = await fetcher.performSiteBackup(
+        minimalSiteConfig({
+          sitemapUrl: undefined,
+          urls: [page1, page2]
+        }),
+        { continueFromLast: false, batchSize: 25 }
+      );
+
+      expect(result.successfulBackups).toBe(2);
+
+      const latestGets = (kv.get as ReturnType<typeof vi.fn>).mock.calls
+        .map((args) => args[0])
+        .filter((key) => typeof key === 'string' && key.startsWith('latest:test-site:'));
+
+      expect(latestGets).toHaveLength(2);
+      expect(latestGets).toEqual(
+        expect.arrayContaining([`latest:test-site:${page1Hash}`, `latest:test-site:${page2Hash}`])
+      );
     });
   });
 });

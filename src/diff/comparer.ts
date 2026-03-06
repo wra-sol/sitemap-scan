@@ -41,9 +41,10 @@ export class ContentComparer {
   ): Promise<DiffResult> {
     const previousHash = await this.calculateNormalizedHash(previousContent, ignorePatterns);
     const currentHash = await this.calculateNormalizedHash(currentContent, ignorePatterns);
+    const magnitude = await this.calculateChangeMagnitude(previousContent, currentContent, ignorePatterns);
 
     const hasChanged = previousHash !== currentHash;
-    const changeSize = Math.abs(currentContent.length - previousContent.length);
+    const changeSize = magnitude.changedChars;
 
     let changeType: 'content' | 'status' | 'metadata' = 'content';
     if (!hasChanged) {
@@ -140,6 +141,53 @@ export class ContentComparer {
     return this.calculateHash(normalized);
   }
 
+  static async calculateChangeMagnitude(
+    previousContent: string,
+    currentContent: string,
+    ignorePatterns?: string[]
+  ): Promise<{
+    changedChars: number;
+    addedChars: number;
+    removedChars: number;
+  }> {
+    const previousNormalized = this.extractTextContent(
+      await this.normalizeContent(previousContent, ignorePatterns)
+    );
+    const currentNormalized = this.extractTextContent(
+      await this.normalizeContent(currentContent, ignorePatterns)
+    );
+
+    if (previousNormalized === currentNormalized) {
+      return {
+        changedChars: 0,
+        addedChars: 0,
+        removedChars: 0
+      };
+    }
+
+    const sharedPrefixLength = this.getSharedPrefixLength(previousNormalized, currentNormalized);
+    const sharedSuffixLength = this.getSharedSuffixLength(
+      previousNormalized,
+      currentNormalized,
+      sharedPrefixLength
+    );
+
+    const removedChars = Math.max(
+      0,
+      previousNormalized.length - sharedPrefixLength - sharedSuffixLength
+    );
+    const addedChars = Math.max(
+      0,
+      currentNormalized.length - sharedPrefixLength - sharedSuffixLength
+    );
+
+    return {
+      changedChars: removedChars + addedChars,
+      addedChars,
+      removedChars
+    };
+  }
+
   static async calculateHash(content: string): Promise<string> {
     const encoder = new TextEncoder();
     const data = encoder.encode(content);
@@ -233,6 +281,33 @@ export class ContentComparer {
     }
     
     return removedCount;
+  }
+
+  private static getSharedPrefixLength(left: string, right: string): number {
+    const maxLength = Math.min(left.length, right.length);
+    let index = 0;
+
+    while (index < maxLength && left[index] === right[index]) {
+      index++;
+    }
+
+    return index;
+  }
+
+  private static getSharedSuffixLength(left: string, right: string, prefixLength: number): number {
+    const leftLength = left.length;
+    const rightLength = right.length;
+    let sharedLength = 0;
+
+    while (
+      sharedLength < leftLength - prefixLength &&
+      sharedLength < rightLength - prefixLength &&
+      left[leftLength - 1 - sharedLength] === right[rightLength - 1 - sharedLength]
+    ) {
+      sharedLength++;
+    }
+
+    return sharedLength;
   }
 
   static async compareBatch(

@@ -1,6 +1,8 @@
 import { SiteConfig, BackupResult, BackupMetadata } from '../types/site';
 import { FetchResult } from '../types/backup';
 import { ContentComparer } from '../diff/comparer';
+import { encodeBackupContent, readBackupContent } from '../runtime/content-storage';
+import { XMLParser } from 'fast-xml-parser';
 
 export interface BatchOptions {
   batchSize?: number;      // Max URLs to process in this batch (default: 500, max recommended: 800)
@@ -38,6 +40,33 @@ export interface BatchedBackupResult {
   };
 }
 
+interface SitemapLocNode {
+  loc?: string;
+}
+
+interface SitemapDocument {
+  urlset?: {
+    url?: SitemapLocNode | SitemapLocNode[];
+  };
+  sitemapindex?: {
+    sitemap?: SitemapLocNode | SitemapLocNode[];
+  };
+}
+
+type SuccessfulBackupResult = BackupResult & {
+  success: true;
+  metadata: BackupMetadata;
+  content: string;
+};
+
+interface PreparedBackupWrite {
+  result: SuccessfulBackupResult;
+  urlHash: string;
+  previousLatest: string | null;
+  previousContent: string | null;
+  changed: boolean;
+}
+
 export class BackupFetcher {
   private kv: KVNamespace;
   // Cloudflare Workers have a 1000 subrequest limit per invocation
@@ -46,6 +75,7 @@ export class BackupFetcher {
   // Testing showed 25 URLs works reliably; 30+ can hit limits
   private static readonly DEFAULT_BATCH_SIZE = 25;
   private static readonly MAX_BATCH_SIZE = 30; // Proven safe limit
+  private static readonly MAX_FETCH_REDIRECTS = 5;
 
   // Sitemap recursion guards to prevent cycles and runaway parsing
   private static readonly MAX_SITEMAP_DEPTH = 10;
@@ -197,12 +227,14 @@ export class BackupFetcher {
     const successfulResults = results.filter(r => r.success);
     const failedResults = results.filter(r => !r.success);
 
-    const changedUrls = await this.detectChanges(
-      siteConfig.id, 
-      successfulResults
+    const preparedWrites = await this.prepareBackupWrites(
+      siteConfig.id,
+      successfulResults,
+      siteConfig.changeThreshold?.ignorePatterns,
+      siteConfig.changeThreshold?.minChangeSize
     );
-
-    const storeStats = await this.storeBackups(siteConfig.id, successfulResults);
+    const changedUrls = preparedWrites.filter((entry) => entry.changed).map((entry) => entry.result.url);
+    const storeStats = await this.storeBackups(siteConfig.id, preparedWrites);
     
     // Only cleanup on first batch to avoid repeated cleanup
     if (batchOffset === 0) {
@@ -379,6 +411,7 @@ export class BackupFetcher {
       const chunk = canonicalUrls.slice(i * chunkSize, (i + 1) * chunkSize);
       await this.kv.put(`sitemap_snapshot:${siteId}:chunk:${i}`, JSON.stringify(chunk), { expirationTtl: ttl });
     }
+    await this.pruneChunkedKeys(`sitemap_snapshot:${siteId}:chunk:`, chunkCount);
   }
 
   private async clearSitemapSnapshot(siteId: string): Promise<void> {
@@ -593,8 +626,14 @@ export class BackupFetcher {
     const successfulResults = results.filter(r => r.success);
     const failedResults = results.filter(r => !r.success);
 
-    const changedUrls = await this.detectChanges(siteConfig.id, successfulResults);
-    const storeStats = await this.storeBackups(siteConfig.id, successfulResults);
+    const preparedWrites = await this.prepareBackupWrites(
+      siteConfig.id,
+      successfulResults,
+      siteConfig.changeThreshold?.ignorePatterns,
+      siteConfig.changeThreshold?.minChangeSize
+    );
+    const changedUrls = preparedWrites.filter((entry) => entry.changed).map((entry) => entry.result.url);
+    const storeStats = await this.storeBackups(siteConfig.id, preparedWrites);
 
     // Retention cleanup (only when we actually write backups)
     if (successfulResults.length > 0) {
@@ -667,6 +706,7 @@ export class BackupFetcher {
       const chunk = urls.slice(i * chunkSize, (i + 1) * chunkSize);
       await this.kv.put(`urls_cache:${siteId}:${date}:chunk:${i}`, JSON.stringify(chunk), { expirationTtl: ttl });
     }
+    await this.pruneChunkedKeys(`urls_cache:${siteId}:${date}:chunk:`, chunkCount);
   }
 
   /** Clear URL cache for a site (all dates). Used by reset endpoint. */
@@ -840,33 +880,22 @@ export class BackupFetcher {
   }
 
   private async extractSitemapLocs(xmlText: string): Promise<string[]> {
-    try {
-      const { XMLParser } = await import('fast-xml-parser');
-      const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_'
-      });
+    const result = this.parseSitemapDocument(xmlText);
+    if (!result) return [];
 
-      const result = parser.parse(xmlText);
-
-      if (result.urlset && result.urlset.url) {
-        const urls = Array.isArray(result.urlset.url) ? result.urlset.url : [result.urlset.url];
-        return urls.map((item: any) => item.loc).filter(Boolean);
-      }
-
-      if (result.sitemapindex && result.sitemapindex.sitemap) {
-        const sitemaps = Array.isArray(result.sitemapindex.sitemap)
-          ? result.sitemapindex.sitemap
-          : [result.sitemapindex.sitemap];
-        return sitemaps
-          .map((s: any) => (typeof s.loc === 'string' ? s.loc : s?.loc))
-          .filter(Boolean);
-      }
-
-      return [];
-    } catch {
-      return [];
+    if (result.urlset?.url) {
+      return this.toSitemapArray(result.urlset.url)
+        .map((item) => item.loc)
+        .filter((loc): loc is string => typeof loc === 'string' && loc.length > 0);
     }
+
+    if (result.sitemapindex?.sitemap) {
+      return this.toSitemapArray(result.sitemapindex.sitemap)
+        .map((item) => item.loc)
+        .filter((loc): loc is string => typeof loc === 'string' && loc.length > 0);
+    }
+
+    return [];
   }
 
   private async calculateSitemapSemanticHash(xmlText: string): Promise<{ semanticHash?: string; locCount: number }> {
@@ -920,32 +949,27 @@ export class BackupFetcher {
       if (depth === 0) {
         await this.recordSitemapState(siteId, response, xmlText);
       }
-      const { XMLParser } = await import('fast-xml-parser');
+      const result = this.parseSitemapDocument(xmlText);
+      if (!result) {
+        return [];
+      }
 
-      const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_'
-      });
-
-      const result = parser.parse(xmlText);
-
-      if (result.urlset && result.urlset.url) {
-        const urls = Array.isArray(result.urlset.url) ? result.urlset.url : [result.urlset.url];
-        const locs = urls.map((item: any) => item.loc).filter(Boolean);
+      if (result.urlset?.url) {
+        const locs = this.toSitemapArray(result.urlset.url)
+          .map((item) => item.loc)
+          .filter((loc): loc is string => typeof loc === 'string' && loc.length > 0);
         if (depth === 0) {
           console.log(`Sitemap parsed in ${Date.now() - parseStart}ms: ${locs.length} URLs from ${sitemapUrl}`);
         }
         return locs;
       }
 
-      if (result.sitemapindex && result.sitemapindex.sitemap) {
-        const sitemaps = Array.isArray(result.sitemapindex.sitemap)
-          ? result.sitemapindex.sitemap
-          : [result.sitemapindex.sitemap];
+      if (result.sitemapindex?.sitemap) {
+        const sitemaps = this.toSitemapArray(result.sitemapindex.sitemap);
         const allUrls: string[] = [];
 
         for (const sitemap of sitemaps) {
-          const loc = typeof sitemap.loc === 'string' ? sitemap.loc : sitemap?.loc;
+          const loc = sitemap.loc;
           if (!loc) continue;
           try {
             const subUrls = await this.parseSitemap(siteId, loc, visited, depth + 1);
@@ -1085,19 +1109,8 @@ export class BackupFetcher {
           }))
       );
 
-      const batchResults = await Promise.allSettled(batchPromises);
-      
-      for (const promiseResult of batchResults) {
-        if (promiseResult.status === 'fulfilled') {
-          results.push(promiseResult.value);
-        } else {
-          results.push({
-            url: 'unknown',
-            success: false,
-            error: 'Batch processing failed'
-          });
-        }
-      }
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults);
     }
 
     return results;
@@ -1116,6 +1129,7 @@ export class BackupFetcher {
         
         const metadata: BackupMetadata = {
           url: fetchResult.url,
+          finalUrl: fetchResult.finalUrl,
           timestamp: new Date().toISOString(),
           hash: await this.calculateHash(fetchResult.content),
           normalizedHash: await ContentComparer.calculateNormalizedHash(fetchResult.content, ignorePatterns),
@@ -1155,7 +1169,6 @@ export class BackupFetcher {
     const startTime = Date.now();
     let redirectCount = 0;
     let currentUrl = url;
-    let finalUrl = url;
 
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -1170,20 +1183,24 @@ export class BackupFetcher {
     }, options.timeout);
 
     try {
+      const requestHeaders = {
+        'User-Agent': 'MultiSiteBackup/1.0 (Cloudflare Worker)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      };
+
       let response = await fetch(currentUrl, {
         method: 'GET',
+        redirect: 'manual',
         signal: controller.signal,
-        headers: {
-          'User-Agent': 'MultiSiteBackup/1.0 (Cloudflare Worker)',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        }
+        headers: requestHeaders
       });
 
-      finalUrl = response.url;
-
-      while (response.redirected && redirectCount < 5) {
+      while (this.isRedirectStatus(response.status)) {
         const location = response.headers.get('location');
         if (!location) break;
+        if (redirectCount >= BackupFetcher.MAX_FETCH_REDIRECTS) {
+          throw new Error(`Too many redirects fetching ${url}`);
+        }
 
         currentUrl = new URL(location, currentUrl).href;
         redirectCount++;
@@ -1193,15 +1210,10 @@ export class BackupFetcher {
 
         response = await fetch(currentUrl, {
           method: 'GET',
-          signal: controller.signal,
           redirect: 'manual',
-          headers: {
-            'User-Agent': 'MultiSiteBackup/1.0 (Cloudflare Worker)',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          }
+          signal: controller.signal,
+          headers: requestHeaders
         });
-
-        finalUrl = response.url;
       }
 
       const headers: Record<string, string> = {};
@@ -1223,7 +1235,7 @@ export class BackupFetcher {
         status: response.status,
         headers,
         url,
-        finalUrl,
+        finalUrl: response.url || currentUrl,
         redirectCount,
         fetchTime
       };
@@ -1242,64 +1254,70 @@ export class BackupFetcher {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  private async detectChanges(siteId: string, results: BackupResult[]): Promise<string[]> {
-    const changedUrls: string[] = [];
-    
-    for (const result of results) {
-      if (!result.metadata) continue;
-      
-      const urlHash = await this.getUrlHash(result.url);
-      const latestKey = `latest:${siteId}:${urlHash}`;
-      const previousMetadata = await this.kv.get(latestKey);
-      
-      if (previousMetadata) {
-        try {
-          const previous = JSON.parse(previousMetadata);
-          const prevComparableHash = previous.normalizedHash || previous.hash;
-          const currComparableHash = result.metadata.normalizedHash || result.metadata.hash;
+  private isRedirectStatus(status: number): boolean {
+    return status >= 300 && status < 400;
+  }
 
-          if (prevComparableHash !== currComparableHash) {
-            changedUrls.push(result.url);
-          }
-        } catch (error) {
-          console.error(`Failed to parse previous metadata for ${result.url}:`, error);
-          changedUrls.push(result.url);
-        }
-      } else {
-        changedUrls.push(result.url);
-      }
-    }
-    
-    return changedUrls;
+  private async prepareBackupWrites(
+    siteId: string,
+    results: BackupResult[],
+    ignorePatterns?: string[],
+    minChangeSize?: number
+  ): Promise<PreparedBackupWrite[]> {
+    const successfulResults = results.filter((result): result is SuccessfulBackupResult =>
+      this.isSuccessfulBackupResult(result)
+    );
+
+    return Promise.all(successfulResults.map(async (result) => {
+      const urlHash = await this.getUrlHash(result.url);
+      const previousLatest = await this.kv.get(`latest:${siteId}:${urlHash}`);
+      const previousContent = await this.loadPreviousContent(siteId, urlHash, previousLatest);
+
+      return {
+        result,
+        urlHash,
+        previousLatest,
+        previousContent,
+        changed: await this.hasBackupChanged(
+          result.url,
+          result.content,
+          result.metadata,
+          previousLatest,
+          previousContent,
+          ignorePatterns,
+          minChangeSize
+        )
+      };
+    }));
   }
 
   private async storeBackups(
     siteId: string,
-    results: BackupResult[]
+    entries: PreparedBackupWrite[]
   ): Promise<{ storedBackups: number; failedStores: number; errors: string[] }> {
     const date = new Date().toISOString().split('T')[0];
     let storedBackups = 0;
     let failedStores = 0;
     const errors: string[] = [];
     
-    for (const result of results) {
-      if (!result.metadata || !result.content) continue;
-      
-      const urlHash = await this.getUrlHash(result.url);
-      
+    for (const entry of entries) {
+      const { result, urlHash, previousLatest } = entry;
       const contentKey = `backup:${siteId}:${date}:${urlHash}`;
       const metadataKey = `meta:${siteId}:${date}:${urlHash}`;
       const latestKey = `latest:${siteId}:${urlHash}`;
       const prevLatestKey = `prev_latest:${siteId}:${urlHash}`;
       
       try {
-        // Preserve previous latest metadata for diff generation in notifications
-        const previousLatest = await this.kv.get(latestKey);
+        const encodedContent = await encodeBackupContent(result.content);
+        const metadataWithEncoding: BackupMetadata = {
+          ...result.metadata,
+          contentEncoding: encodedContent.encoding
+        };
 
         await Promise.all([
-          this.kv.put(contentKey, result.content),
-          this.kv.put(metadataKey, JSON.stringify(result.metadata)),
-          this.kv.put(latestKey, JSON.stringify(result.metadata)),
+          this.kv.put(contentKey, encodedContent.storedContent),
+          this.kv.put(metadataKey, JSON.stringify(metadataWithEncoding)),
+          this.kv.put(latestKey, JSON.stringify(metadataWithEncoding)),
           ...(previousLatest ? [this.kv.put(prevLatestKey, previousLatest)] : [])
         ]);
         storedBackups++;
@@ -1313,37 +1331,150 @@ export class BackupFetcher {
     return { storedBackups, failedStores, errors };
   }
 
+  private isSuccessfulBackupResult(result: BackupResult): result is SuccessfulBackupResult {
+    return result.success === true && typeof result.content === 'string' && result.metadata !== undefined;
+  }
+
+  private async loadPreviousContent(
+    siteId: string,
+    urlHash: string,
+    previousMetadataRaw: string | null
+  ): Promise<string | null> {
+    if (!previousMetadataRaw) {
+      return null;
+    }
+
+    try {
+      const previous = JSON.parse(previousMetadataRaw) as Partial<BackupMetadata>;
+      const previousDate = previous.timestamp?.split('T')[0];
+
+      if (!previousDate) {
+        return null;
+      }
+
+      return await readBackupContent(this.kv, siteId, previousDate, urlHash, previous);
+    } catch (error) {
+      console.error(`Failed to load previous content for ${siteId}:${urlHash}:`, error);
+      return null;
+    }
+  }
+
+  private async hasBackupChanged(
+    url: string,
+    content: string,
+    metadata: BackupMetadata,
+    previousMetadataRaw: string | null,
+    previousContent: string | null,
+    ignorePatterns?: string[],
+    minChangeSize?: number
+  ): Promise<boolean> {
+    if (!previousMetadataRaw) {
+      return true;
+    }
+
+    try {
+      const previous = JSON.parse(previousMetadataRaw) as Partial<BackupMetadata>;
+      const prevComparableHash = previous.normalizedHash || previous.hash;
+      const currComparableHash = metadata.normalizedHash || metadata.hash;
+
+      if (prevComparableHash === currComparableHash) {
+        return false;
+      }
+
+      if (!previousContent || !minChangeSize || minChangeSize <= 0) {
+        return true;
+      }
+
+      const changeMagnitude = await ContentComparer.calculateChangeMagnitude(
+        previousContent,
+        content,
+        ignorePatterns
+      );
+
+      return changeMagnitude.changedChars >= minChangeSize;
+    } catch (error) {
+      console.error(`Failed to parse previous metadata for ${url}:`, error);
+      return true;
+    }
+  }
+
+  private parseSitemapDocument(xmlText: string): SitemapDocument | null {
+    try {
+      const parser = new XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: '@_'
+      });
+      return parser.parse(xmlText) as SitemapDocument;
+    } catch {
+      return null;
+    }
+  }
+
+  private toSitemapArray(value: SitemapLocNode | SitemapLocNode[]): SitemapLocNode[] {
+    return Array.isArray(value) ? value : [value];
+  }
+
+  private async pruneChunkedKeys(prefix: string, keepCount: number): Promise<void> {
+    let cursor: string | undefined;
+
+    do {
+      const list = await this.kv.list({
+        prefix,
+        limit: 1000,
+        cursor
+      }) as { keys: { name: string }[]; list_complete: boolean; cursor?: string };
+
+      for (const key of list.keys) {
+        const suffix = key.name.slice(prefix.length);
+        const chunkIndex = Number.parseInt(suffix, 10);
+
+        if (Number.isFinite(chunkIndex) && chunkIndex >= keepCount) {
+          await this.kv.delete(key.name);
+        }
+      }
+
+      cursor = list.list_complete ? undefined : list.cursor;
+    } while (cursor);
+  }
+
   private async cleanupOldBackups(siteId: string, retentionDays: number): Promise<void> {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
     const cutoffString = cutoffDate.toISOString().split('T')[0];
 
     try {
-      const list = await this.kv.list({
-        prefix: `backup:${siteId}:`,
-        limit: 1000
-      });
+      let cursor: string | undefined;
+      let deletedCount = 0;
 
-      const keysToDelete: string[] = [];
+      do {
+        const list = await this.kv.list({
+          prefix: `backup:${siteId}:`,
+          limit: 1000,
+          cursor
+        }) as { keys: { name: string }[]; list_complete: boolean; cursor?: string };
 
-      for (const key of list.keys) {
-        const keyParts = key.name.split(':');
-        if (keyParts.length >= 4) {
-          const date = keyParts[2];
-          if (date < cutoffString) {
-            keysToDelete.push(key.name);
-            
-            const metadataKey = key.name.replace('backup:', 'meta:');
-            keysToDelete.push(metadataKey);
+        const keysToDelete: string[] = [];
+
+        for (const key of list.keys) {
+          const keyParts = key.name.split(':');
+          if (keyParts.length >= 4) {
+            const date = keyParts[2];
+            if (date < cutoffString) {
+              keysToDelete.push(key.name);
+              keysToDelete.push(key.name.replace('backup:', 'meta:'));
+            }
           }
         }
-      }
 
-      for (const key of keysToDelete) {
-        await this.kv.delete(key);
-      }
+        for (const key of keysToDelete) {
+          await this.kv.delete(key);
+        }
 
-      console.log(`Cleaned up ${keysToDelete.length} old backup entries for ${siteId}`);
+        deletedCount += keysToDelete.length;
+        cursor = list.list_complete ? undefined : list.cursor;
+      } while (cursor);
+
+      console.log(`Cleaned up ${deletedCount} old backup entries for ${siteId}`);
     } catch (error) {
       console.error(`Failed to cleanup old backups for ${siteId}:`, error);
     }

@@ -1,4 +1,6 @@
 import { DetailedDiff, DiffGenerationOptions, DiffCacheEntry } from '../types/diff';
+import { BackupMetadata } from '../types/site';
+import { readBackupContent } from '../runtime/content-storage';
 import { ContentComparer } from './comparer';
 
 export class DiffGenerator {
@@ -177,25 +179,29 @@ export class DiffGenerator {
     url: string
   ): Promise<DetailedDiff | null> {
     const urlHash = await this.getUrlHash(url);
-    const backupKey1 = this.getBackupKey(siteId, date1, urlHash);
-    const backupKey2 = this.getBackupKey(siteId, date2, urlHash);
     const metadataKey1 = this.getMetadataKey(siteId, date1, urlHash);
     const metadataKey2 = this.getMetadataKey(siteId, date2, urlHash);
 
-    const [content1, content2, metadata1, metadata2] = await Promise.all([
-      this.kv.get(backupKey1, 'text'),
-      this.kv.get(backupKey2, 'text'),
+    const [metadata1, metadata2] = await Promise.all([
       this.kv.get(metadataKey1, 'text'),
       this.kv.get(metadataKey2, 'text')
     ]);
 
-    if (!content1 || !content2 || !metadata1 || !metadata2) {
+    if (!metadata1 || !metadata2) {
       return null;
     }
 
     try {
-      const data1 = JSON.parse(metadata1) as { hash: string };
-      const data2 = JSON.parse(metadata2) as { hash: string };
+      const data1 = JSON.parse(metadata1) as BackupMetadata;
+      const data2 = JSON.parse(metadata2) as BackupMetadata;
+      const [content1, content2] = await Promise.all([
+        readBackupContent(this.kv, siteId, date1, urlHash, data1),
+        readBackupContent(this.kv, siteId, date2, urlHash, data2)
+      ]);
+
+      if (!content1 || !content2) {
+        return null;
+      }
 
       return await ContentComparer.classifyChanges(
         url,
@@ -269,10 +275,6 @@ export class DiffGenerator {
   private async getCacheKey(siteId: string, date: string, url: string): Promise<string> {
     const urlHash = await this.getUrlHash(url);
     return `diff:${siteId}:${date}:${urlHash}`;
-  }
-
-  private getBackupKey(siteId: string, date: string, urlHash: string): string {
-    return `backup:${siteId}:${date}:${urlHash}`;
   }
 
   private getMetadataKey(siteId: string, date: string, urlHash: string): string {
