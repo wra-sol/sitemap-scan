@@ -447,6 +447,60 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
       expect(requestOptions[0]).toMatchObject({ redirect: 'manual' });
       expect(requestOptions[1]).toMatchObject({ redirect: 'manual' });
     });
+
+    it('uses Cloudflare Scrape API when credentials are configured', async () => {
+      const apiCalls: Array<{ url: string; init?: Record<string, unknown> }> = [];
+      const fetchSpy = vi.fn((input: string | Request | URL, init?: Record<string, unknown>) => {
+        const requestUrl = typeof input === 'string' ? input : (input as Request).url ?? String(input);
+        apiCalls.push({ url: requestUrl, init });
+
+        return Promise.resolve(new Response(JSON.stringify({
+          success: true,
+          result: [
+            {
+              selector: 'html',
+              results: {
+                html: '<html><body>rendered by scrape api</body></html>'
+              }
+            }
+          ]
+        }), {
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' })
+        }));
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const kv = createMockKV();
+      const fetcher = new BackupFetcher(kv, {
+        accountId: 'account-123',
+        apiToken: 'token-123',
+        cacheTtlSeconds: 10
+      });
+
+      const result = await fetcher.performSiteBackup(
+        minimalSiteConfig({
+          sitemapUrl: undefined,
+          urls: ['https://example.com/app']
+        }),
+        { continueFromLast: false, batchSize: 25 }
+      );
+
+      expect(result.successfulBackups).toBe(1);
+      expect(result.results[0].metadata?.status).toBe(200);
+      expect(apiCalls).toHaveLength(1);
+      expect(apiCalls[0].url).toBe('https://api.cloudflare.com/client/v4/accounts/account-123/browser-rendering/scrape?cacheTTL=10');
+      expect(apiCalls[0].init).toMatchObject({
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer token-123'
+        }
+      });
+
+      const requestBody = JSON.parse((apiCalls[0].init?.body as string) || '{}');
+      expect(requestBody.url).toBe('https://example.com/app');
+      expect(requestBody.elements).toEqual([{ selector: 'html' }]);
+    });
   });
 
   describe('cleanupOldBackups', () => {

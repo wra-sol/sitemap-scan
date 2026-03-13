@@ -67,8 +67,31 @@ interface PreparedBackupWrite {
   changed: boolean;
 }
 
+export interface CloudflareScrapeApiOptions {
+  accountId?: string;
+  apiToken?: string;
+  cacheTtlSeconds?: number;
+}
+
+interface CloudflareScrapeApiResultEnvelope {
+  success?: boolean;
+  errors?: Array<{ code?: number; message?: string }>;
+  result?: Array<{
+    selector?: string;
+    results?: {
+      html?: string;
+      text?: string;
+    };
+  }>;
+}
+
 export class BackupFetcher {
   private kv: KVNamespace;
+  private scrapeApiOptions?: {
+    accountId: string;
+    apiToken: string;
+    cacheTtlSeconds?: number;
+  };
   // Cloudflare Workers have a 1000 subrequest limit per invocation
   // Each URL requires: 1 fetch + ~4 KV operations (get latest, put content, put meta, put latest)
   // Plus detect changes needs additional KV reads
@@ -94,8 +117,21 @@ export class BackupFetcher {
   private static readonly SITEMAP_PENDING_TTL = 7 * 24 * 3600; // 7d
   private static readonly SITEMAP_LISTENER_REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1h
 
-  constructor(kv: KVNamespace) {
+  constructor(kv: KVNamespace, scrapeApiOptions?: CloudflareScrapeApiOptions) {
     this.kv = kv;
+
+    if (
+      scrapeApiOptions?.accountId &&
+      scrapeApiOptions.accountId.trim().length > 0 &&
+      scrapeApiOptions?.apiToken &&
+      scrapeApiOptions.apiToken.trim().length > 0
+    ) {
+      this.scrapeApiOptions = {
+        accountId: scrapeApiOptions.accountId,
+        apiToken: scrapeApiOptions.apiToken,
+        cacheTtlSeconds: scrapeApiOptions.cacheTtlSeconds
+      };
+    }
   }
 
   async performSiteBackup(
@@ -1166,6 +1202,14 @@ export class BackupFetcher {
   }
 
   private async performFetch(url: string, options: SiteConfig['fetchOptions']): Promise<FetchResult> {
+    if (this.scrapeApiOptions) {
+      return this.performCloudflareScrapeFetch(url, options.timeout);
+    }
+
+    return this.performDirectFetch(url, options);
+  }
+
+  private async performDirectFetch(url: string, options: SiteConfig['fetchOptions']): Promise<FetchResult> {
     const startTime = Date.now();
     let redirectCount = 0;
     let currentUrl = url;
@@ -1244,6 +1288,64 @@ export class BackupFetcher {
       clearMyTimeout();
       throw error;
     }
+  }
+
+  private async performCloudflareScrapeFetch(url: string, timeoutMs: number): Promise<FetchResult> {
+    const startTime = Date.now();
+    const scrapeApi = this.scrapeApiOptions;
+
+    if (!scrapeApi) {
+      throw new Error('Cloudflare Scrape API options are not configured');
+    }
+
+    const endpoint = new URL(
+      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(scrapeApi.accountId)}/browser-rendering/scrape`
+    );
+
+    if (typeof scrapeApi.cacheTtlSeconds === 'number' && Number.isFinite(scrapeApi.cacheTtlSeconds) && scrapeApi.cacheTtlSeconds >= 0) {
+      endpoint.searchParams.set('cacheTTL', String(scrapeApi.cacheTtlSeconds));
+    }
+
+    const response = await fetch(endpoint.toString(), {
+      method: 'POST',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${scrapeApi.apiToken}`
+      },
+      body: JSON.stringify({
+        url,
+        elements: [{ selector: 'html' }]
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Cloudflare Scrape API HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const payload = await response.json() as CloudflareScrapeApiResultEnvelope;
+    if (!payload.success) {
+      const apiError = payload.errors?.[0]?.message || 'Cloudflare Scrape API returned an unsuccessful response';
+      throw new Error(apiError);
+    }
+
+    const firstResult = payload.result?.[0]?.results;
+    const content = firstResult?.html || firstResult?.text;
+    if (!content) {
+      throw new Error('Cloudflare Scrape API returned no content for selector html');
+    }
+
+    return {
+      content,
+      status: 200,
+      headers: {
+        'content-type': 'text/html; charset=utf-8'
+      },
+      url,
+      finalUrl: url,
+      redirectCount: 0,
+      fetchTime: Date.now() - startTime
+    };
   }
 
   private async calculateHash(content: string): Promise<string> {

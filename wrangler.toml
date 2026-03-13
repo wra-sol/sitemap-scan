@@ -27,6 +27,11 @@ PUBLIC_BASE_URL =  "https://multi-site-backup.chester-hill-solutions.workers.dev
 # DEFAULT_SLACK_WEBHOOK = "<set via: wrangler secret put DEFAULT_SLACK_WEBHOOK>"
 # wrangler secret put ADMIN_API_TOKEN
 # ADMIN_API_TOKEN = "<set via: wrangler secret put ADMIN_API_TOKEN>"
+# Optional: use Cloudflare Browser Rendering Scrape API for page fetches
+# wrangler secret put CLOUDFLARE_SCRAPE_API_TOKEN
+# CLOUDFLARE_SCRAPE_API_TOKEN = "<set via: wrangler secret put CLOUDFLARE_SCRAPE_API_TOKEN>"
+# CLOUDFLARE_ACCOUNT_ID = "<your account id>"
+# CLOUDFLARE_SCRAPE_CACHE_TTL = "5"
 
 
 

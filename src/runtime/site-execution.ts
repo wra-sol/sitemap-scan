@@ -7,6 +7,9 @@ interface ExecutionEnv {
   BACKUP_KV: KVNamespace;
   DEFAULT_SLACK_WEBHOOK?: string;
   PUBLIC_BASE_URL?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_SCRAPE_API_TOKEN?: string;
+  CLOUDFLARE_SCRAPE_CACHE_TTL?: string;
 }
 
 interface ExecuteSiteBackupRunOptions {
@@ -67,7 +70,14 @@ export async function executeSiteBackupRun(
   options: ExecuteSiteBackupRunOptions
 ): Promise<ExecuteSiteBackupRunResult> {
   const runStore = new RunStore(env.BACKUP_KV);
-  const fetcher = new BackupFetcher(env.BACKUP_KV);
+  const cacheTtlSeconds = env.CLOUDFLARE_SCRAPE_CACHE_TTL
+    ? Number.parseInt(env.CLOUDFLARE_SCRAPE_CACHE_TTL, 10)
+    : undefined;
+  const fetcher = new BackupFetcher(env.BACKUP_KV, {
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    apiToken: env.CLOUDFLARE_SCRAPE_API_TOKEN,
+    cacheTtlSeconds: Number.isFinite(cacheTtlSeconds) ? cacheTtlSeconds : undefined
+  });
   const slackNotifier = new SlackNotifier(env.BACKUP_KV, env.DEFAULT_SLACK_WEBHOOK, env.PUBLIC_BASE_URL);
   const runRecord = await runStore.startRun(siteConfig, options.trigger);
 

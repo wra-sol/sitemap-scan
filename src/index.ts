@@ -1,4 +1,4 @@
-import { BackupFetcher } from './backup/fetcher';
+import { BackupFetcher, type CloudflareScrapeApiOptions } from './backup/fetcher';
 import { requireApiAuth } from './http/auth';
 import { serveOperatorConsole } from './http/operator-console';
 import { SiteManager } from './sites/manager';
@@ -19,6 +19,25 @@ export interface Env {
   ADMIN_API_TOKEN?: string;
   DEFAULT_SLACK_WEBHOOK?: string;
   PUBLIC_BASE_URL?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_SCRAPE_API_TOKEN?: string;
+  CLOUDFLARE_SCRAPE_CACHE_TTL?: string;
+}
+
+function buildScrapeApiOptions(env: Env): CloudflareScrapeApiOptions | undefined {
+  if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_SCRAPE_API_TOKEN) {
+    return undefined;
+  }
+
+  const cacheTtlSeconds = env.CLOUDFLARE_SCRAPE_CACHE_TTL
+    ? Number.parseInt(env.CLOUDFLARE_SCRAPE_CACHE_TTL, 10)
+    : undefined;
+
+  return {
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    apiToken: env.CLOUDFLARE_SCRAPE_API_TOKEN,
+    cacheTtlSeconds: Number.isFinite(cacheTtlSeconds) ? cacheTtlSeconds : undefined
+  };
 }
 
 function jsonResponse(body: unknown, status: number = 200): Response {
@@ -179,7 +198,7 @@ async function handleGetRequest(
       }
     
     case '/api/sites/overview':
-      return jsonResponse(await buildSitesOverview(siteManager, siteRegistry, env.BACKUP_KV));
+      return jsonResponse(await buildSitesOverview(siteManager, siteRegistry, env.BACKUP_KV, env));
 
     case '/api/sites/health':
       if (siteId) {
@@ -329,7 +348,7 @@ async function handlePostRequest(
     
     case '/api/backup/progress':
       const progressBody = await request.json() as { siteId: string };
-      const progressFetcher = new BackupFetcher(env.BACKUP_KV);
+      const progressFetcher = new BackupFetcher(env.BACKUP_KV, buildScrapeApiOptions(env));
       const progress = await progressFetcher.getBatchProgress(progressBody.siteId);
       
       return jsonResponse(progress || { hasMore: false, message: 'No batch in progress' });
@@ -340,7 +359,7 @@ async function handlePostRequest(
       if (!resetSiteConfig) {
         return new Response('Site not found', { status: 404 });
       }
-      const resetFetcher = new BackupFetcher(env.BACKUP_KV);
+      const resetFetcher = new BackupFetcher(env.BACKUP_KV, buildScrapeApiOptions(env));
       await resetFetcher.resetSiteProgress(resetBody.siteId);
       return jsonResponse({ success: true, message: 'Batch progress and URL cache cleared for site' });
     
@@ -399,11 +418,12 @@ async function handleDeleteRequest(
 async function buildSitesOverview(
   siteManager: SiteManager,
   siteRegistry: SiteRegistry,
-  kv: KVNamespace
+  kv: KVNamespace,
+  env: Env
 ): Promise<Array<Record<string, unknown>>> {
   const sites = await siteManager.getAllSiteConfigs();
   const runStore = new RunStore(kv);
-  const fetcher = new BackupFetcher(kv);
+  const fetcher = new BackupFetcher(kv, buildScrapeApiOptions(env));
 
   return Promise.all(sites.map(async (site) => {
     const [health, metrics, latestRun, progress] = await Promise.all([

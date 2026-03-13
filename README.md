@@ -71,7 +71,13 @@ A comprehensive backup utility for monitoring multiple websites, detecting chang
 6. **Set your Worker public URL (for Slack links)**:
    Update `PUBLIC_BASE_URL` in `wrangler.toml` to match your deployed Worker URL.
 
-7. **Deploy**:
+7. **(Optional) Enable Cloudflare Scrape API for rendered pages**:
+   ```bash
+   wrangler secret put CLOUDFLARE_SCRAPE_API_TOKEN
+   ```
+   Then set `CLOUDFLARE_ACCOUNT_ID` (and optionally `CLOUDFLARE_SCRAPE_CACHE_TTL`) in `wrangler.toml`.
+
+8. **Deploy**:
    ```bash
    wrangler deploy
    ```
@@ -203,6 +209,7 @@ Custom ignore patterns can be configured per site using regular expressions.
 - **Retries**: Automatic exponential backoff (up to 3 attempts by default)
 - **Rate Limiting**: Configurable concurrency limits per site
 - **Timeout**: Default 10-second timeout per request
+- **Rendering Option**: Can fetch pages through Cloudflare Browser Rendering Scrape API
 - **Health Monitoring**: Regular site health checks with Slack alerts
 - **Graceful Degradation**: Failed sites don't affect other sites
 
