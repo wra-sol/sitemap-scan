@@ -167,4 +167,123 @@ describe('SlackNotifier', () => {
     expect(second.throttled).toBe(true);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('retries change notification on transient fetch failure and eventually succeeds', async () => {
+    const fetchSpy = vi.fn()
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const kv = createMockKV();
+    const notifier = new SlackNotifier(kv, 'https://hooks.slack.com/services/test/webhook', 'https://example.workers.dev');
+    const siteConfig = {
+      id: 'test-site',
+      name: 'Test Site',
+      baseUrl: 'https://example.com',
+      urls: ['https://example.com/page'],
+      retentionDays: 7,
+      schedule: '0 2 * * *',
+      fetchOptions: { timeout: 1000, retries: 1, concurrency: 1 },
+      changeThreshold: { minChangeSize: 0, ignorePatterns: [] }
+    };
+    const backupResult = {
+      siteId: 'test-site',
+      siteName: 'Test Site',
+      totalUrls: 1,
+      successfulBackups: 1,
+      failedBackups: 0,
+      storedBackups: 1,
+      failedStores: 0,
+      changedUrls: ['https://example.com/page'],
+      executionTime: 5,
+      errors: [],
+      results: [
+        {
+          url: 'https://example.com/page',
+          success: true,
+          content: '<html>after</html>',
+          metadata: {
+            url: 'https://example.com/page',
+            timestamp: '2026-03-05T12:00:00.000Z',
+            hash: 'curr-hash',
+            normalizedHash: 'curr-hash',
+            status: 200,
+            contentType: 'text/html',
+            size: 18,
+            fetchTime: 5
+          }
+        }
+      ]
+    };
+
+    const result = await notifier.sendChangeNotificationWithDetails(siteConfig, backupResult);
+
+    expect(result.delivered).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries error notification on transient fetch failure and eventually succeeds', async () => {
+    const fetchSpy = vi.fn()
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const kv = createMockKV();
+    const notifier = new SlackNotifier(kv, 'https://hooks.slack.com/services/test/webhook', 'https://example.workers.dev');
+    const siteConfig = {
+      id: 'test-site',
+      name: 'Test Site',
+      baseUrl: 'https://example.com',
+      urls: ['https://example.com/page'],
+      retentionDays: 7,
+      schedule: '0 2 * * *',
+      fetchOptions: { timeout: 1000, retries: 1, concurrency: 1 },
+      changeThreshold: { minChangeSize: 0, ignorePatterns: [] }
+    };
+
+    const result = await notifier.sendErrorNotificationWithDetails(siteConfig, 'Something went wrong');
+
+    expect(result.delivered).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries summary notification on transient fetch failure and eventually succeeds', async () => {
+    const fetchSpy = vi.fn()
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const kv = createMockKV();
+    const notifier = new SlackNotifier(kv, 'https://hooks.slack.com/services/test/webhook', 'https://example.workers.dev');
+    const siteConfig = {
+      id: 'test-site',
+      name: 'Test Site',
+      baseUrl: 'https://example.com',
+      urls: ['https://example.com/page'],
+      retentionDays: 7,
+      schedule: '0 2 * * *',
+      fetchOptions: { timeout: 1000, retries: 1, concurrency: 1 },
+      changeThreshold: { minChangeSize: 0, ignorePatterns: [] }
+    };
+    const backupResult = {
+      siteId: 'test-site',
+      siteName: 'Test Site',
+      totalUrls: 1,
+      successfulBackups: 1,
+      failedBackups: 0,
+      storedBackups: 1,
+      failedStores: 0,
+      changedUrls: [],
+      executionTime: 5,
+      errors: [],
+      results: []
+    };
+
+    const result = await notifier.sendSummaryNotification('2026-03-05', [
+      { siteConfig, backupResult }
+    ]);
+
+    expect(result).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
 });

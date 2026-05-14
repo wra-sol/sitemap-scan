@@ -24,6 +24,33 @@ export class SlackNotifier {
     this.publicBaseUrl = publicBaseUrl;
   }
 
+  /**
+   * Retry a fetch operation with exponential backoff.
+   */
+  private async retryFetch(
+    url: string,
+    init: Parameters<typeof fetch>[1],
+    options: { maxRetries?: number; baseDelay?: number } = {}
+  ): Promise<Response> {
+    const { maxRetries = 3, baseDelay = 1000 } = options;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const response = await fetch(url, init);
+        return response;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, attempt);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    throw lastError ?? new Error('Retry failed');
+  }
+
   async sendChangeNotification(
     siteConfig: SiteConfig,
     backupResult: SiteBackupResult
@@ -62,7 +89,7 @@ export class SlackNotifier {
 
       const message = await this.buildChangeMessage(siteConfig, backupResult);
       
-      const response = await fetch(webhookUrl, {
+      const response = await this.retryFetch(webhookUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -129,7 +156,7 @@ export class SlackNotifier {
 
       const message = this.buildErrorMessage(siteConfig, error, context);
       
-      const response = await fetch(webhookUrl, {
+      const response = await this.retryFetch(webhookUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -178,7 +205,7 @@ export class SlackNotifier {
 
       const message = this.buildSummaryMessage(date, globalResults);
       
-      const response = await fetch(this.defaultWebhook, {
+      const response = await this.retryFetch(this.defaultWebhook, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
