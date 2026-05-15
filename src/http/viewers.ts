@@ -1,4 +1,4 @@
-export async function serveDiffViewer(kv: KVNamespace): Promise<Response> {
+export async function serveDiffViewer(_kv: KVNamespace): Promise<Response> {
   const viewerHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -910,7 +910,7 @@ export async function serveDiffViewer(kv: KVNamespace): Promise<Response> {
   });
 }
 
-export async function serveBackupViewer(kv: KVNamespace): Promise<Response> {
+export async function serveBackupViewer(_kv: KVNamespace): Promise<Response> {
   const viewerHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>

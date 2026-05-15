@@ -94,7 +94,7 @@ describe('SlackNotifier', () => {
     });
 
     const notifier = new SlackNotifier(kv, undefined, 'https://example.workers.dev');
-    const summaryBuilder = (notifier as unknown as Record<string, Function>).buildUrlDiffSummary.bind(notifier);
+    const summaryBuilder = (notifier as unknown as Record<string, (...args: unknown[]) => unknown>).buildUrlDiffSummary.bind(notifier);
 
     const summary = await summaryBuilder(
       'test-site',

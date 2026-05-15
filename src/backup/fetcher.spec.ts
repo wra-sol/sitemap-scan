@@ -520,7 +520,7 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
 
       const kv = createMockKV(initial);
       const fetcher = new BackupFetcher(kv);
-      const cleanupOldBackups = (fetcher as unknown as Record<string, Function>).cleanupOldBackups.bind(fetcher);
+      const cleanupOldBackups = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).cleanupOldBackups.bind(fetcher);
 
       await cleanupOldBackups('test-site', 7);
 
@@ -536,8 +536,8 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
     it('removes stale URL cache chunks when a cached sitemap shrinks', async () => {
       const kv = createMockKV();
       const fetcher = new BackupFetcher(kv);
-      const saveUrlsCache = (fetcher as unknown as Record<string, Function>).saveUrlsCache.bind(fetcher);
-      const loadUrlsCache = (fetcher as unknown as Record<string, Function>).loadUrlsCache.bind(fetcher);
+      const saveUrlsCache = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).saveUrlsCache.bind(fetcher);
+      const loadUrlsCache = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).loadUrlsCache.bind(fetcher);
       const date = '2026-03-05';
 
       await saveUrlsCache(
@@ -556,8 +556,8 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
     it('removes stale sitemap snapshot chunks when the monitored sitemap shrinks', async () => {
       const kv = createMockKV();
       const fetcher = new BackupFetcher(kv);
-      const saveSitemapSnapshot = (fetcher as unknown as Record<string, Function>).saveSitemapSnapshot.bind(fetcher);
-      const loadSitemapSnapshotState = (fetcher as unknown as Record<string, Function>).loadSitemapSnapshotState.bind(fetcher);
+      const saveSitemapSnapshot = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).saveSitemapSnapshot.bind(fetcher);
+      const loadSitemapSnapshotState = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).loadSitemapSnapshotState.bind(fetcher);
 
       await saveSitemapSnapshot(
         'test-site',
@@ -579,7 +579,7 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
     it('reuses latest metadata lookups for change detection and storage', async () => {
       const kv = createMockKV();
       const fetcher = new BackupFetcher(kv);
-      const getUrlHash = (fetcher as unknown as Record<string, Function>).getUrlHash.bind(fetcher);
+      const getUrlHash = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).getUrlHash.bind(fetcher);
       const page1 = 'https://example.com/page1';
       const page2 = 'https://example.com/page2';
       const page1Hash = await getUrlHash(page1);
