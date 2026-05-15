@@ -1,6 +1,13 @@
 import { XMLParser } from 'fast-xml-parser';
 import { UrlEntry, SitemapParseResult } from '../types/backup';
 
+interface ParsedXmlUrl {
+  loc?: string;
+  lastmod?: string;
+  changefreq?: string;
+  priority?: string | number;
+}
+
 export class SitemapParser {
   static async parseSitemap(sitemapUrl: string): Promise<SitemapParseResult> {
     try {
@@ -36,10 +43,8 @@ export class SitemapParser {
         };
       }
 
-      const lastModified = response.headers.get('last-modified');
-
       if (xmlText.includes('<sitemapindex')) {
-        return await this.parseSitemapIndex(xmlText, sitemapUrl);
+        return await this.parseSitemapIndex(xmlText);
       } else {
         return this.parseUrlSet(xmlText);
       }
@@ -74,12 +79,12 @@ export class SitemapParser {
         : [result.urlset.url];
 
       const urls: UrlEntry[] = urlEntries
-        .filter((entry: any) => entry.loc)
-        .map((entry: any) => ({
-          loc: entry.loc.trim(),
+        .filter((entry: ParsedXmlUrl) => entry.loc)
+        .map((entry: ParsedXmlUrl) => ({
+          loc: entry.loc!.trim(),
           lastmod: entry.lastmod,
           changefreq: entry.changefreq,
-          priority: entry.priority ? parseFloat(entry.priority) : undefined
+          priority: entry.priority ? parseFloat(String(entry.priority)) : undefined
         }));
 
       return {
@@ -95,7 +100,7 @@ export class SitemapParser {
     }
   }
 
-  private static async parseSitemapIndex(xmlText: string, baseUrl: string): Promise<SitemapParseResult> {
+  private static async parseSitemapIndex(xmlText: string): Promise<SitemapParseResult> {
     try {
       const parser = new XMLParser({
         ignoreAttributes: false,

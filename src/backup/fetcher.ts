@@ -860,7 +860,7 @@ export class BackupFetcher {
       const excludeRegexes = excludePatterns.map(pattern => {
         try {
           return new RegExp(pattern, 'i');
-        } catch (e) {
+        } catch {
           console.error(`Invalid exclude pattern: ${pattern}`);
           return null;
         }

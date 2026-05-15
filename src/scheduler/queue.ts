@@ -1,4 +1,4 @@
-import { ScheduledJob, SiteConfig } from '../types/site';
+import { ScheduledJob } from '../types/site';
 
 export class JobQueue {
   private kv: KVNamespace;
@@ -128,7 +128,7 @@ export class JobQueue {
       
       await this.kv.put(jobKey, JSON.stringify(jobData));
       
-      const nextRun = this.calculateNextRun(job.schedule);
+      const nextRun = this.calculateNextRun();
       const nextJob: ScheduledJob = {
         siteId: job.siteId,
         schedule: job.schedule,
@@ -143,8 +143,7 @@ export class JobQueue {
     }
   }
 
-  private calculateNextRun(cronExpression: string): string {
-    const parts = cronExpression.split(' ');
+  private calculateNextRun(): string {
     const now = new Date();
     
     const nextRun = new Date(now);
@@ -153,7 +152,7 @@ export class JobQueue {
     return nextRun.toISOString();
   }
 
-  async getJobHistory(siteId: string, limit: number = 50): Promise<any[]> {
+  async getJobHistory(siteId: string, limit: number = 50): Promise<unknown[]> {
     try {
       const list = await this.kv.list({
         prefix: `job:${siteId}:`,

@@ -407,9 +407,6 @@ export class ContentComparer {
   private static detectTextContentChanges(prev: string, curr: string): ContentChange[] {
     const changes: ContentChange[] = [];
     
-    // Extract and compare specific important elements
-    const importantTags = ['title', 'h1', 'h2', 'h3', 'p', 'meta[name="description"]', 'meta[name="twitter:description"]'];
-    
     // Title comparison
     const prevTitle = this.extractTagContent(prev, 'title');
     const currTitle = this.extractTagContent(curr, 'title');
@@ -656,7 +653,6 @@ export class ContentComparer {
     const elements: HTMLElement[] = [];
     const regex = /<([a-z][a-z0-9]*)([^>]*)>(.*?)<\/\1>|<([a-z][a-z0-9]*)([^>]*)\/?>/gis;
     let match;
-    let position = 0;
 
     while ((match = regex.exec(html)) !== null) {
       const tag = match[1] || match[4];
@@ -673,8 +669,6 @@ export class ContentComparer {
         content: content.trim(),
         position: { line, column }
       });
-
-      position = match.index + match[0].length;
     }
 
     return elements;

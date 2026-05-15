@@ -50,8 +50,7 @@ export class DiffGenerator {
         previousContent,
         currentContent,
         previousHash,
-        currentHash,
-        options
+        currentHash
       );
     } else {
       diff = await ContentComparer.classifyChanges(
@@ -223,8 +222,7 @@ export class DiffGenerator {
     previousContent: string,
     currentContent: string,
     previousHash: string,
-    currentHash: string,
-    options: DiffGenerationOptions
+    currentHash: string
   ): Promise<DetailedDiff> {
     const chunkSize = 50000;
     const chunks = Math.ceil(Math.max(previousContent.length, currentContent.length) / chunkSize);
@@ -248,7 +246,7 @@ export class DiffGenerator {
   private limitChanges(diff: DetailedDiff, maxChanges: number): DetailedDiff {
     const limited = { ...diff };
 
-    const prioritySort = (a: any, b: any) => b.priority - a.priority;
+    const prioritySort = (a: { priority: number }, b: { priority: number }) => b.priority - a.priority;
 
     limited.classification.content = diff.classification.content
       .sort(prioritySort)

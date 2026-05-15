@@ -235,10 +235,10 @@ async function handleGetRequest(
       return jsonResponse(testResult);
     
     case '/diff/viewer':
-      return await serveDiffViewer(env.BACKUP_KV);
+      return await serveDiffViewer();
     
     case '/backup/viewer':
-      return await serveBackupViewer(env.BACKUP_KV);
+      return await serveBackupViewer();
     
     default:
       // Preview endpoint: /api/sites/{siteId}/preview/{date}/{urlHash}

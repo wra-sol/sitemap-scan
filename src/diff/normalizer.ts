@@ -189,15 +189,15 @@ export class ContentNormalizer {
     return normalized;
   }
 
-  private static normalizeJSONObject(obj: any): any {
+  private static normalizeJSONObject(obj: unknown): unknown {
     if (Array.isArray(obj)) {
       return obj.map(this.normalizeJSONObject.bind(this));
     }
 
     if (obj !== null && typeof obj === 'object') {
-      const normalized: any = {};
+      const normalized: Record<string, unknown> = {};
       
-      for (const [key, value] of Object.entries(obj)) {
+      for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
         if (typeof key === 'string' && this.isDynamicKey(key)) {
           continue;
         }

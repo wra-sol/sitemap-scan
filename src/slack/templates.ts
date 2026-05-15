@@ -4,7 +4,7 @@ export class SlackTemplates {
     changedUrl: string,
     changeType: string,
     url?: string
-  ): any {
+  ): Record<string, unknown> {
     return {
       type: 'section',
       text: {
@@ -30,9 +30,8 @@ export class SlackTemplates {
     successfulSites: number,
     totalChanges: number,
     totalErrors: number
-  ): any {
+  ): Record<string, unknown> {
     const successRate = ((successfulSites / totalSites) * 100).toFixed(1);
-    const color = totalErrors === 0 ? 'good' : totalErrors > 5 ? 'danger' : 'warning';
 
     return {
       type: 'section',
@@ -58,7 +57,7 @@ export class SlackTemplates {
     changesCount: number,
     url: string,
     executionTime?: number
-  ): any {
+  ): Record<string, unknown> {
     const statusEmoji = status === 'success' ? '✅' : status === 'error' ? '❌' : '⚠️';
     const executionTimeText = executionTime ? ` (${(executionTime / 1000).toFixed(2)}s)` : '';
 
@@ -76,7 +75,7 @@ export class SlackTemplates {
     siteName: string,
     error: string,
     timestamp?: string
-  ): any {
+  ): Record<string, unknown> {
     return {
       type: 'section',
       text: {
@@ -88,11 +87,11 @@ export class SlackTemplates {
     };
   }
 
-  static createDividerBlock(): any {
+  static createDividerBlock(): Record<string, unknown> {
     return { type: 'divider' };
   }
 
-  static createHeaderBlock(text: string): any {
+  static createHeaderBlock(text: string): Record<string, unknown> {
     return {
       type: 'header',
       text: {
@@ -103,7 +102,7 @@ export class SlackTemplates {
     };
   }
 
-  static createContextBlock(elements: string[]): any {
+  static createContextBlock(elements: string[]): Record<string, unknown> {
     return {
       type: 'context',
       elements: elements.map(text => ({
@@ -113,7 +112,7 @@ export class SlackTemplates {
     };
   }
 
-  static buildBlocksMessage(blocks: any[]): any {
+  static buildBlocksMessage(blocks: Record<string, unknown>[]): Record<string, unknown> {
     return {
       username: 'Website Backup Monitor',
       icon_emoji: ':mag:',
@@ -125,7 +124,7 @@ export class SlackTemplates {
     text: string,
     color: 'good' | 'warning' | 'danger',
     fields?: Array<{ title: string; value: string; short?: boolean }>
-  ): any {
+  ): Record<string, unknown> {
     return {
       username: 'Website Backup Monitor',
       icon_emoji: ':mag:',
@@ -147,7 +146,7 @@ export class SlackTemplates {
       size: number;
     }>,
     executionTime: number
-  ): any[] {
+  ): Record<string, unknown>[] {
     const blocks = [
       this.createHeaderBlock(`🔍 ${siteName} - Detailed Change Report`),
       this.createDividerBlock(),
@@ -197,7 +196,7 @@ export class SlackTemplates {
       totalChanges: number;
       successRate: number;
     }>
-  ): any {
+  ): Record<string, unknown> {
     const totalSites = weekStats.length;
     const totalChanges = weekStats.reduce((sum, stat) => sum + stat.totalChanges, 0);
     const avgSuccessRate = weekStats.reduce((sum, stat) => sum + stat.successRate, 0) / totalSites;
@@ -281,7 +280,7 @@ export class SlackTemplates {
     siteName: string,
     baseUrl: string,
     managementUrl?: string
-  ): any {
+  ): Record<string, unknown> {
     return {
       type: 'actions',
       elements: [

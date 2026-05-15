@@ -1,6 +1,7 @@
 import { BackupFetcher } from '../backup/fetcher';
+import type { BatchedBackupResult } from '../backup/fetcher';
 import { SlackNotifier } from '../slack/notifier';
-import { SiteConfig, SiteBackupResult } from '../types/site';
+import { SiteConfig, SiteBackupResult, ExecutionStats, ScheduledJob } from '../types/site';
 import { JobQueue } from './queue';
 import { SiteManager } from '../sites/manager';
 
@@ -80,7 +81,7 @@ export class SchedulerDispatcher {
     const startTime = new Date().toISOString();
     
     try {
-      const stats = await this.recordJobStart(job.siteId, startTime);
+      await this.recordJobStart(job.siteId, startTime);
       
       console.log(`Starting backup job for site: ${siteConfig.name} (${siteConfig.id})`);
       
@@ -109,13 +110,13 @@ export class SchedulerDispatcher {
     }
   }
 
-  private async recordJobStart(siteId: string, startTime: string): Promise<any> {
+  private async recordJobStart(siteId: string, startTime: string): Promise<ExecutionStats> {
     const statsKey = `stats:${siteId}:${new Date(startTime).toISOString().split('T')[0]}`;
     const stats = {
       siteId,
       date: new Date(startTime).toISOString().split('T')[0],
       startTime,
-      endTime: null,
+      endTime: '',
       totalUrls: 0,
       successCount: 0,
       failureCount: 0,
@@ -129,7 +130,7 @@ export class SchedulerDispatcher {
     return stats;
   }
 
-  private async recordJobComplete(siteId: string, startTime: string, result: any): Promise<void> {
+  private async recordJobComplete(siteId: string, startTime: string, result: BatchedBackupResult): Promise<void> {
     const statsKey = `stats:${siteId}:${new Date(startTime).toISOString().split('T')[0]}`;
     const existingStats = await this.kv.get(statsKey);
     
@@ -145,14 +146,14 @@ export class SchedulerDispatcher {
     }
   }
 
-  private async recordJobError(siteId: string, startTime: string, error: any): Promise<void> {
+  private async recordJobError(siteId: string, startTime: string, error: string): Promise<void> {
     const statsKey = `stats:${siteId}:${new Date(startTime).toISOString().split('T')[0]}`;
     const existingStats = await this.kv.get(statsKey);
     
     if (existingStats) {
       const stats = JSON.parse(existingStats);
       stats.endTime = new Date().toISOString();
-      stats.errors.push(error.message || String(error));
+      stats.errors.push(error);
       
       await this.kv.put(statsKey, JSON.stringify(stats));
     }
@@ -220,7 +221,7 @@ export class SchedulerDispatcher {
     return 1;
   }
 
-  async getSchedulerStatus(): Promise<any> {
+  async getSchedulerStatus(): Promise<{ totalSites: number; queuedJobs: number; upcomingJobs: ScheduledJob[]; schedules: string[] }> {
     const queueStatus = await this.jobQueue.getQueueStatus();
     const sites = await this.siteManager.getAllSiteConfigs();
     

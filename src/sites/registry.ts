@@ -69,7 +69,7 @@ export class SiteRegistry {
     return { healthy: issues.length === 0, issues };
   }
 
-  async getSiteMetrics(siteId: string, days: number = 7): Promise<any> {
+  async getSiteMetrics(siteId: string, days: number = 7): Promise<{ totalBackups: number; successfulBackups: number; failedBackups: number; averageExecutionTime: number; recentErrors: string[] }> {
     const metrics = {
       totalBackups: 0,
       successfulBackups: 0,

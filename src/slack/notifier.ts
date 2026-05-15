@@ -131,7 +131,7 @@ export class SlackNotifier {
   async sendErrorNotification(
     siteConfig: SiteConfig,
     error: string,
-    context?: any
+    context?: unknown
   ): Promise<boolean> {
     const delivery = await this.sendErrorNotificationWithDetails(siteConfig, error, context);
     return delivery.delivered;
@@ -140,7 +140,7 @@ export class SlackNotifier {
   async sendErrorNotificationWithDetails(
     siteConfig: SiteConfig,
     error: string,
-    context?: any
+    context?: unknown
   ): Promise<SlackDeliveryResult> {
     try {
       const webhookUrl = siteConfig.slackWebhook || this.defaultWebhook;
@@ -223,7 +223,7 @@ export class SlackNotifier {
   private async buildChangeMessage(
     siteConfig: SiteConfig,
     backupResult: SiteBackupResult
-  ): Promise<any> {
+  ): Promise<Record<string, unknown>> {
     const date = new Date().toISOString().split('T')[0];
     const executionTimeSeconds = (backupResult.executionTime / 1000).toFixed(2);
     const baseUrl = this.getPublicBaseUrl();
@@ -236,7 +236,7 @@ export class SlackNotifier {
     const hasMoreChanges = backupResult.changedUrls.length > maxUrlsWithDiffs;
     const digestMode = backupResult.changedUrls.length > 10;
 
-    const blocks: any[] = [
+    const blocks: Record<string, unknown>[] = [
       {
         type: 'header',
         text: { type: 'plain_text', text: `${digestMode ? 'Digest' : 'Changes detected'}: ${siteConfig.name}`, emoji: true }
@@ -326,7 +326,7 @@ export class SlackNotifier {
       });
     }
 
-    const message: any = {
+    const message: Record<string, unknown> = {
       username: 'Website Backup Monitor',
       icon_emoji: ':mag:',
       text: `Changes detected for ${siteConfig.name}`,
@@ -516,8 +516,8 @@ export class SlackNotifier {
   private buildErrorMessage(
     siteConfig: SiteConfig,
     error: string,
-    context?: any
-  ): any {
+    context?: unknown
+  ): Record<string, unknown> {
     const fields = [
       {
         title: 'Site',
@@ -564,7 +564,7 @@ export class SlackNotifier {
       siteConfig: SiteConfig;
       backupResult: SiteBackupResult;
     }>
-  ): any {
+  ): Record<string, unknown> {
     const totalSites = globalResults.length;
     const successfulSites = globalResults.filter(r => r.backupResult.failedBackups === 0).length;
     const totalUrls = globalResults.reduce((sum, r) => sum + r.backupResult.totalUrls, 0);
