@@ -1,6 +1,7 @@
 import { serveDiffViewer, serveBackupViewer } from './http/viewers';
 import { BackupFetcher, type CloudflareScrapeApiOptions } from './backup/fetcher';
 import { requireApiAuth } from './http/auth';
+import { applyRateLimit } from './http/rate-limit';
 import { serveOperatorConsole } from './http/operator-console';
 import { SiteManager } from './sites/manager';
 import { SlackNotifier } from './slack/notifier';
@@ -23,6 +24,8 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_SCRAPE_API_TOKEN?: string;
   CLOUDFLARE_SCRAPE_CACHE_TTL?: string;
+  RATE_LIMIT_REQUESTS?: string;
+  RATE_LIMIT_WINDOW_MS?: string;
 }
 
 function buildScrapeApiOptions(env: Env): CloudflareScrapeApiOptions | undefined {
@@ -133,6 +136,11 @@ export default {
   },
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const rateLimitResponse = await applyRateLimit(request, env);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
     const url = new URL(request.url);
     const siteManager = new SiteManager(env.BACKUP_KV);
     const slackNotifier = new SlackNotifier(env.BACKUP_KV, env.DEFAULT_SLACK_WEBHOOK, env.PUBLIC_BASE_URL);
