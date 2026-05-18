@@ -18,13 +18,17 @@ export default [
         ...globals.node,
         ...globals.worker,
         KVNamespace: 'readonly',
+        KVNamespaceListResult: 'readonly',
         fetch: 'readonly',
         AbortSignal: 'readonly',
         crypto: 'readonly',
         CompressionStream: 'readonly',
         DecompressionStream: 'readonly',
         URLSearchParams: 'readonly',
-        DOMParser: 'readonly'
+        DOMParser: 'readonly',
+        ExecutionContext: 'readonly',
+        ScheduledEvent: 'readonly',
+        RequestInit: 'readonly'
       }
     },
     plugins: {
@@ -33,7 +37,7 @@ export default [
     rules: {
       'no-unused-vars': 'off',
       'no-useless-assignment': 'off',
-      '@typescript-eslint/no-unused-vars': 'warn',
+      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
       'prefer-const': 'error',
       'no-var': 'error',

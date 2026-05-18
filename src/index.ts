@@ -10,7 +10,6 @@ import { toPublicSiteConfig } from './sites/public-config';
 import { SiteRegistry } from './sites/registry';
 import { SiteConfig, SiteBackupResult } from './types/site';
 import { DiffGenerator } from './diff/generator';
-import { ContentComparer } from './diff/comparer';
 import { readBackupContent } from './runtime/content-storage';
 import { executeSiteBackupRun } from './runtime/site-execution';
 import { SiteDataService } from './runtime/site-data';
@@ -52,7 +51,7 @@ function jsonResponse(body: unknown, status: number = 200): Response {
 }
 
 export default {
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     console.log(`Scheduled event triggered: ${event.cron}`);
     
     const siteManager = new SiteManager(env.BACKUP_KV);
@@ -135,7 +134,7 @@ export default {
     }
   },
 
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const rateLimitResponse = await applyRateLimit(request, env);
     if (rateLimitResponse) {
       return rateLimitResponse;
@@ -221,13 +220,14 @@ async function handleGetRequest(
     case '/api/runs':
       return jsonResponse(await handleRecentRuns(url, env.BACKUP_KV));
 
-    case '/api/sites/metrics':
+    case '/api/sites/metrics': {
       if (!siteId) {
         return new Response('siteId parameter required', { status: 400 });
       }
       const days = parseInt(url.searchParams.get('days') || '7');
       const metrics = await siteRegistry.getSiteMetrics(siteId, days);
       return new Response(JSON.stringify(metrics));
+    }
     
     case '/api/sites/dates':
       if (!siteId) {
@@ -238,9 +238,10 @@ async function handleGetRequest(
     case '/api/status':
       return jsonResponse(await buildSchedulerStatus(siteManager, env.BACKUP_KV));
     
-    case '/api/test':
+    case '/api/test': {
       const testResult = await siteRegistry.validateAllSites();
       return jsonResponse(testResult);
+    }
     
     case '/diff/viewer':
       return await serveDiffViewer();
@@ -295,7 +296,7 @@ async function handlePostRequest(
   const path = url.pathname;
   
   switch (path) {
-    case '/api/sites':
+    case '/api/sites': {
       const body = await request.json() as SiteConfig;
       const validationResult = await siteManager.validateSiteConfig(body);
       
@@ -309,13 +310,15 @@ async function handlePostRequest(
       }
 
       return jsonResponse({ success: true, siteId: body.id }, 201);
+    }
     
-    case '/api/slack/test':
+    case '/api/slack/test': {
       const slackBody = await request.json() as { webhook?: string };
       const testSuccess = await slackNotifier.sendTestNotification(slackBody.webhook);
       return jsonResponse({ success: testSuccess });
+    }
     
-    case '/api/backup/trigger':
+    case '/api/backup/trigger': {
       const triggerBody = await request.json() as { 
         siteId: string;
         batchSize?: number;
@@ -354,15 +357,17 @@ async function handlePostRequest(
       };
       
       return jsonResponse(responsePayload);
+    }
     
-    case '/api/backup/progress':
+    case '/api/backup/progress': {
       const progressBody = await request.json() as { siteId: string };
       const progressFetcher = new BackupFetcher(env.BACKUP_KV, buildScrapeApiOptions(env));
       const progress = await progressFetcher.getBatchProgress(progressBody.siteId);
       
       return jsonResponse(progress || { hasMore: false, message: 'No batch in progress' });
+    }
 
-    case '/api/backup/reset':
+    case '/api/backup/reset': {
       const resetBody = await request.json() as { siteId: string };
       const resetSiteConfig = await siteManager.getSiteConfig(resetBody.siteId);
       if (!resetSiteConfig) {
@@ -371,6 +376,7 @@ async function handlePostRequest(
       const resetFetcher = new BackupFetcher(env.BACKUP_KV, buildScrapeApiOptions(env));
       await resetFetcher.resetSiteProgress(resetBody.siteId);
       return jsonResponse({ success: true, message: 'Batch progress and URL cache cleared for site' });
+    }
     
     default:
       return new Response('Not found', { status: 404 });
@@ -512,7 +518,7 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
     return new Response('Invalid diff request', { status: 400 });
   }
 
-  const [_, siteId, date] = match;
+  const [, siteId, date] = match;
 
   try {
     const siteManager = new SiteManager(kv);
@@ -570,8 +576,6 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
 
             if (currMetaData) {
               const currData = JSON.parse(currMetaData);
-              const backupPrevKey = `backup:${siteId}:${previousDate}:${urlData.urlHash}`;
-              const backupCurrKey = `backup:${siteId}:${date}:${urlData.urlHash}`;
               
               const prevBackupContent = await readBackupContent(kv, siteId, previousDate, urlData.urlHash, prevData);
               const currBackupContent = await readBackupContent(kv, siteId, date, urlData.urlHash, currData);
@@ -627,7 +631,7 @@ async function handleUrlHistoryRequest(path: string, kv: KVNamespace): Promise<R
     return new Response('Invalid URL history request', { status: 400 });
   }
 
-  const [_, siteId, date, urlHash] = match;
+  const [, siteId, date, urlHash] = match;
 
   try {
     const siteManager = new SiteManager(kv);
@@ -743,7 +747,7 @@ async function handleListBackedUpUrls(siteId: string, requestUrl: URL, kv: KVNam
 
     // We need to fetch all keys to support search and sorting
     // KV list doesn't support filtering, so we paginate through all keys
-    let allUrls: Array<{
+    const allUrls: Array<{
       url: string;
       urlHash: string;
       latestDate: string;
