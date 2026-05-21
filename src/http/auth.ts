@@ -1,19 +1,11 @@
+import { jsonResponse } from './responses';
+
 export interface ApiAuthEnv {
   ADMIN_API_TOKEN?: string;
 }
 
 const LOCAL_DEV_HOSTS = new Set(['localhost', '127.0.0.1']);
 const PUBLIC_PATHS = new Set(['/', '/app', '/diff/viewer', '/backup/viewer']);
-
-function jsonResponse(body: Record<string, string>, status: number, extraHeaders?: Record<string, string>): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...extraHeaders
-    }
-  });
-}
 
 function getProvidedToken(request: Request): string | null {
   const authorization = request.headers.get('authorization');

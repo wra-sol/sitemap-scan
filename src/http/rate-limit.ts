@@ -1,3 +1,5 @@
+import { jsonResponse } from './responses';
+
 export interface RateLimitEnv {
   BACKUP_KV: KVNamespace;
   RATE_LIMIT_REQUESTS?: string;
@@ -29,16 +31,6 @@ function getClientId(request: Request): string {
 
 function getWindowStart(now: number, windowMs: number): number {
   return Math.floor(now / windowMs) * windowMs;
-}
-
-function jsonResponse(body: Record<string, unknown>, status: number, extraHeaders?: Record<string, string>): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...extraHeaders
-    }
-  });
 }
 
 export async function applyRateLimit(request: Request, env: RateLimitEnv): Promise<Response | null> {

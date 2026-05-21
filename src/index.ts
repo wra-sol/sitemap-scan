@@ -3,6 +3,7 @@ import { BackupFetcher, type CloudflareScrapeApiOptions } from './backup/fetcher
 import { requireApiAuth } from './http/auth';
 import { applyRateLimit } from './http/rate-limit';
 import { serveOperatorConsole } from './http/operator-console';
+import { jsonResponse } from './http/responses';
 import { SiteManager } from './sites/manager';
 import { SlackNotifier } from './slack/notifier';
 import { matchesCronExpression } from './scheduler/cron';
@@ -43,13 +44,6 @@ function buildScrapeApiOptions(env: Env): CloudflareScrapeApiOptions | undefined
   };
 }
 
-function jsonResponse(body: unknown, status: number = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' }
-  });
-}
-
 export default {
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     console.log(`Scheduled event triggered: ${event.cron}`);
@@ -79,7 +73,7 @@ export default {
           const execution = await executeSiteBackupRun(env, site, {
             trigger: 'scheduled',
             continueFromLast: true,
-            batchSize: 30
+            batchSize: 500
           });
 
           if (execution.runRecord.status === 'failed' || execution.runRecord.status === 'partial') {
@@ -169,13 +163,7 @@ export default {
       }
     } catch (error) {
       console.error('API request failed:', error);
-      return new Response(
-        JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-        { 
-          status: 500, 
-          headers: { 'Content-Type': 'application/json' } 
-        }
-      );
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
     }
   }
 };
@@ -403,10 +391,7 @@ async function handlePutRequest(
   const validationResult = await siteManager.validateSiteConfig(body);
   
   if (!validationResult.valid) {
-    return new Response(
-      JSON.stringify({ error: 'Invalid configuration', details: validationResult.errors }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ error: 'Invalid configuration', details: validationResult.errors }, 400);
   }
   
   const saved = await siteManager.saveSiteConfig(body);
@@ -499,16 +484,10 @@ async function handleGetSiteDates(siteId: string, kv: KVNamespace): Promise<Resp
       }
     }
     
-    return new Response(
-      JSON.stringify(Array.from(dates).sort().reverse()),
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse(Array.from(dates).sort().reverse());
   } catch (error) {
     console.error('Failed to get site dates:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to retrieve dates' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ error: 'Failed to retrieve dates' }, 500);
   }
 }
 
@@ -563,7 +542,7 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
     const diffGenerator = new DiffGenerator(kv);
     const previousDate = await getPreviousDate(siteId, date, kv);
 
-    for (const urlData of urls.slice(0, 10)) {
+    for (const urlData of urls) {
       if (previousDate) {
         const prevKey = `meta:${siteId}:${previousDate}:${urlData.urlHash}`;
         const prevMetaData = await kv.get(prevKey, 'text');
@@ -604,24 +583,18 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
       }
     }
 
-    return new Response(
-      JSON.stringify({
-        siteId,
-        date,
-        urls: urls.filter(u => u.contentChanges > 0 || u.styleChanges > 0 || u.structureChanges > 0),
-        summary: {
-          totalUrls: urls.length,
-          changedUrls: urls.filter(u => u.contentChanges > 0 || u.styleChanges > 0 || u.structureChanges > 0).length
-        }
-      }),
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({
+      siteId,
+      date,
+      urls: urls.filter(u => u.contentChanges > 0 || u.styleChanges > 0 || u.structureChanges > 0),
+      summary: {
+        totalUrls: urls.length,
+        changedUrls: urls.filter(u => u.contentChanges > 0 || u.styleChanges > 0 || u.structureChanges > 0).length
+      }
+    });
   } catch (error) {
     console.error('Failed to handle diff request:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to generate diff' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ error: 'Failed to generate diff' }, 500);
   }
 }
 
@@ -682,25 +655,19 @@ async function handleUrlHistoryRequest(path: string, kv: KVNamespace): Promise<R
       { includeContent: true, includeStyle: true, includeStructure: true }
     );
 
-    return new Response(
-      JSON.stringify({
-        ...diff,
-        currentDate: date,
-        previousDate,
-        urlHash,
-        source: {
-          previous: prevBackupContent,
-          current: currBackupContent
-        }
-      }),
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({
+      ...diff,
+      currentDate: date,
+      previousDate,
+      urlHash,
+      source: {
+        previous: prevBackupContent,
+        current: currBackupContent
+      }
+    });
   } catch (error) {
     console.error('Failed to handle URL history request:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to generate URL diff' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ error: 'Failed to generate URL diff' }, 500);
   }
 }
 
@@ -832,23 +799,17 @@ async function handleListBackedUpUrls(siteId: string, requestUrl: URL, kv: KVNam
     const paginatedUrls = allUrls.slice(startIndex, startIndex + limit);
     const nextCursor = startIndex + limit < allUrls.length ? String(startIndex + limit) : null;
 
-    return new Response(
-      JSON.stringify({
-        urls: paginatedUrls,
-        total: allUrls.length,
-        limit,
-        cursor: cursor || '0',
-        nextCursor,
-        hasMore: nextCursor !== null
-      }),
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({
+      urls: paginatedUrls,
+      total: allUrls.length,
+      limit,
+      cursor: cursor || '0',
+      nextCursor,
+      hasMore: nextCursor !== null
+    });
   } catch (error) {
     console.error('Failed to list backed up URLs:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to list URLs' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ error: 'Failed to list URLs' }, 500);
   }
 }
 
@@ -894,16 +855,10 @@ async function handleBackupHistory(siteId: string, urlHash: string, kv: KVNamesp
     // Sort by date descending (newest first)
     history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    return new Response(
-      JSON.stringify(history),
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse(history);
   } catch (error) {
     console.error('Failed to get backup history:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to get backup history' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ error: 'Failed to get backup history' }, 500);
   }
 }
 
