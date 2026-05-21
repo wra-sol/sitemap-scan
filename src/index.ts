@@ -211,10 +211,10 @@ async function handleGetRequest(
     case '/api/sites/health':
       if (siteId) {
         const health = await siteRegistry.validateSiteHealth(siteId);
-        return new Response(JSON.stringify(health));
+        return jsonResponse(health);
       } else {
         const allHealth = await siteRegistry.validateAllSites();
-        return new Response(JSON.stringify(allHealth));
+        return jsonResponse(allHealth);
       }
     
     case '/api/runs':
@@ -226,7 +226,7 @@ async function handleGetRequest(
       }
       const days = parseInt(url.searchParams.get('days') || '7');
       const metrics = await siteRegistry.getSiteMetrics(siteId, days);
-      return new Response(JSON.stringify(metrics));
+      return jsonResponse(metrics);
     }
     
     case '/api/sites/dates':
@@ -411,7 +411,7 @@ async function handlePutRequest(
   
   const saved = await siteManager.saveSiteConfig(body);
   return saved 
-    ? new Response(JSON.stringify({ success: true }))
+    ? jsonResponse({ success: true })
     : new Response('Failed to update site configuration', { status: 500 });
 }
 
