@@ -900,6 +900,11 @@ export class BackupFetcher {
       u.protocol = u.protocol.toLowerCase();
       u.hostname = u.hostname.toLowerCase();
 
+      // Normalize trailing slashes: strip from path except preserve root "/"
+      if (u.pathname !== '/' && u.pathname.endsWith('/')) {
+        u.pathname = u.pathname.slice(0, -1);
+      }
+
       // Normalize query param order but preserve duplicates.
       const entries = Array.from(u.searchParams.entries()).sort((a, b) => {
         if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
