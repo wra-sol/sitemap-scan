@@ -627,4 +627,39 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
       );
     });
   });
+
+  describe('canonicalizeForSitemapState', () => {
+    it('strips trailing slash from URL paths except root', () => {
+      const fetcher = new BackupFetcher(createMockKV());
+      const canonicalize = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).canonicalizeForSitemapState.bind(fetcher);
+
+      expect(canonicalize('https://example.com/page/')).toBe('https://example.com/page');
+      expect(canonicalize('https://example.com/path/to/resource/')).toBe('https://example.com/path/to/resource');
+    });
+
+    it('preserves root path with trailing slash', () => {
+      const fetcher = new BackupFetcher(createMockKV());
+      const canonicalize = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).canonicalizeForSitemapState.bind(fetcher);
+
+      expect(canonicalize('https://example.com/')).toBe('https://example.com/');
+      expect(canonicalize('https://example.com')).toBe('https://example.com/');
+    });
+
+    it('leaves URLs without trailing slash unchanged', () => {
+      const fetcher = new BackupFetcher(createMockKV());
+      const canonicalize = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).canonicalizeForSitemapState.bind(fetcher);
+
+      expect(canonicalize('https://example.com/page')).toBe('https://example.com/page');
+      expect(canonicalize('https://example.com/page?foo=bar')).toBe('https://example.com/page?foo=bar');
+    });
+
+    it('makes trailing-slash variants collide to the same canonical URL', () => {
+      const fetcher = new BackupFetcher(createMockKV());
+      const canonicalize = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).canonicalizeForSitemapState.bind(fetcher);
+
+      const withoutSlash = canonicalize('https://example.com/page');
+      const withSlash = canonicalize('https://example.com/page/');
+      expect(withoutSlash).toBe(withSlash);
+    });
+  });
 });
