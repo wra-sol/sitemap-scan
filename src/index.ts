@@ -14,6 +14,7 @@ import { DiffGenerator } from './diff/generator';
 import { readBackupContent } from './runtime/content-storage';
 import { executeSiteBackupRun } from './runtime/site-execution';
 import { SiteDataService } from './runtime/site-data';
+import { listKeysWithPrefix } from './runtime/kv-helpers';
 import { RunStore } from './runtime/run-store';
 
 export interface Env {
@@ -473,17 +474,17 @@ async function buildSchedulerStatus(siteManager: SiteManager, kv: KVNamespace): 
 
 async function handleGetSiteDates(siteId: string, kv: KVNamespace): Promise<Response> {
   try {
-    const list = await kv.list({ prefix: `backup:${siteId}:` });
+    const keys = await listKeysWithPrefix(kv, `backup:${siteId}:`);
     const dates = new Set<string>();
-    
-    for (const key of list.keys) {
-      const regex = new RegExp(`backup:${siteId}:(\\d{4}-\\d{2}-\\d{2})`);
-      const match = key.name.match(regex);
+
+    const regex = new RegExp(`backup:${siteId}:(\\d{4}-\\d{2}-\\d{2})`);
+    for (const keyName of keys) {
+      const match = keyName.match(regex);
       if (match) {
         dates.add(match[1]);
       }
     }
-    
+
     return jsonResponse(Array.from(dates).sort().reverse());
   } catch (error) {
     console.error('Failed to get site dates:', error);
@@ -506,7 +507,7 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
       return new Response('Site not found', { status: 404 });
     }
 
-    const list = await kv.list({ prefix: `backup:${siteId}:${date}:` });
+    const keys = await listKeysWithPrefix(kv, `backup:${siteId}:${date}:`);
     const urls: Array<{
       url: string;
       urlHash: string;
@@ -514,10 +515,10 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
       styleChanges: number;
       structureChanges: number;
     }> = [];
-    
+
     const urlRegex = new RegExp(`backup:${siteId}:${date}:([a-f0-9]+)`);
-    for (const key of list.keys) {
-      const urlMatch = key.name.match(urlRegex);
+    for (const keyName of keys) {
+      const urlMatch = keyName.match(urlRegex);
       if (urlMatch) {
         const urlHash = urlMatch[1];
         const metaKey = `meta:${siteId}:${date}:${urlHash}`;
@@ -817,7 +818,7 @@ async function handleListBackedUpUrls(siteId: string, requestUrl: URL, kv: KVNam
 async function handleBackupHistory(siteId: string, urlHash: string, kv: KVNamespace): Promise<Response> {
   try {
     // List all metadata entries for this site
-    const list = await kv.list({ prefix: `meta:${siteId}:` });
+    const keys = await listKeysWithPrefix(kv, `meta:${siteId}:`);
     const history: Array<{
       date: string;
       timestamp: string;
@@ -827,13 +828,13 @@ async function handleBackupHistory(siteId: string, urlHash: string, kv: KVNamesp
       contentType: string;
     }> = [];
 
-    for (const key of list.keys) {
+    for (const keyName of keys) {
       // Check if this key matches the urlHash
-      const keyParts = key.name.split(':');
+      const keyParts = keyName.split(':');
       if (keyParts.length >= 4 && keyParts[3] === urlHash) {
         const date = keyParts[2];
-        const metaData = await kv.get(key.name, 'text');
-        
+        const metaData = await kv.get(keyName, 'text');
+
         if (metaData) {
           try {
             const metadata = JSON.parse(metaData);
@@ -846,7 +847,7 @@ async function handleBackupHistory(siteId: string, urlHash: string, kv: KVNamesp
               contentType: metadata.contentType || 'text/html'
             });
           } catch (error) {
-            console.error(`Failed to parse metadata for ${key.name}:`, error);
+            console.error(`Failed to parse metadata for ${keyName}:`, error);
           }
         }
       }
@@ -887,11 +888,11 @@ async function handleBackupSource(siteId: string, date: string, urlHash: string,
 }
 
 async function getPreviousDate(siteId: string, currentDate: string, kv: KVNamespace): Promise<string | null> {
-  const list = await kv.list({ prefix: `backup:${siteId}:` });
+  const keys = await listKeysWithPrefix(kv, `backup:${siteId}:`);
   const dates = new Set<string>();
 
-  for (const key of list.keys) {
-    const match = key.name.match(/backup:[^:]+:(\d{4}-\d{2}-\d{2})/);
+  for (const keyName of keys) {
+    const match = keyName.match(/backup:[^:]+:(\d{4}-\d{2}-\d{2})/);
     if (match) {
       dates.add(match[1]);
     }
