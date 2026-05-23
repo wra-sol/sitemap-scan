@@ -380,7 +380,22 @@ export class ContentComparer {
     classification.style = this.detectCSSChanges(previousContent, currentContent);
     classification.structure = this.detectTagChanges(previousContent, currentContent);
 
-    const totalChanges = classification.content.length + classification.style.length + classification.structure.length;
+    let totalChanges = classification.content.length + classification.style.length + classification.structure.length;
+
+    // Fallback: if the hash differs but no semantic changes were detected, emit a generic change
+    // so downstream consumers (Slack, diff viewer) remain consistent.
+    if (previousHash !== currentHash && totalChanges === 0) {
+      classification.content.push({
+        type: 'content',
+        priority: 1,
+        element: 'html',
+        position: { line: 1, column: 1 },
+        change: 'modified',
+        context: 'HTML changed (no semantic differences detected)'
+      });
+      totalChanges = 1;
+    }
+
     const highestPriority = this.calculateHighestPriority(classification);
 
     return {
