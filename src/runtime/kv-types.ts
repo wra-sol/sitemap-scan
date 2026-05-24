@@ -1,5 +1,6 @@
 export interface KVListKey {
   name: string;
+  expiration?: number;
 }
 
 export interface KVListResult {

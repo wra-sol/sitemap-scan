@@ -1,5 +1,6 @@
 import { BackupMetadata } from '../types/site';
 import { decodeBackupContent, encodeBackupContent } from '../runtime/content-storage';
+import { listKeysWithPrefix, listKeyInfosWithPrefix } from '../runtime/kv-helpers';
 
 export class StorageManager {
   private kv: KVNamespace;
@@ -105,25 +106,22 @@ export class StorageManager {
     limit: number = 30
   ): Promise<Array<{ date: string; metadata: BackupMetadata }>> {
     try {
-      const list = await this.kv.list({
-        prefix: `meta:${siteId}:`,
-        limit: limit * 2
-      });
+      const keys = await listKeysWithPrefix(this.kv, `meta:${siteId}:`);
 
       const backupHistory: Array<{ date: string; metadata: BackupMetadata }> = [];
 
-      for (const key of list.keys) {
-        const keyParts = key.name.split(':');
+      for (const keyName of keys) {
+        const keyParts = keyName.split(':');
         if (keyParts.length >= 4 && keyParts[3] === urlHash) {
           const date = keyParts[2];
-          const metadataData = await this.kv.get(key.name);
+          const metadataData = await this.kv.get(keyName);
           
           if (metadataData) {
             try {
               const metadata = JSON.parse(metadataData) as BackupMetadata;
               backupHistory.push({ date, metadata });
             } catch (error) {
-              console.error(`Failed to parse metadata for ${key.name}:`, error);
+              console.error(`Failed to parse metadata for ${keyName}:`, error);
             }
           }
         }
@@ -140,22 +138,19 @@ export class StorageManager {
 
   async deleteBackupsBefore(siteId: string, cutoffDate: string): Promise<number> {
     try {
-      const list = await this.kv.list({
-        prefix: `backup:${siteId}:`,
-        limit: 1000
-      });
+      const keys = await listKeysWithPrefix(this.kv, `backup:${siteId}:`);
 
       const keysToDelete: string[] = [];
       const cutoff = new Date(cutoffDate);
 
-      for (const key of list.keys) {
-        const keyParts = key.name.split(':');
+      for (const keyName of keys) {
+        const keyParts = keyName.split(':');
         if (keyParts.length >= 4) {
           const date = keyParts[2];
           if (new Date(date) < cutoff) {
-            keysToDelete.push(key.name);
+            keysToDelete.push(keyName);
             
-            const metadataKey = key.name.replace('backup:', 'meta:');
+            const metadataKey = keyName.replace('backup:', 'meta:');
             keysToDelete.push(metadataKey);
           }
         }
@@ -180,15 +175,12 @@ export class StorageManager {
     newestBackup: string | null;
   }> {
     try {
-      const list = await this.kv.list({
-        prefix: `backup:${siteId}:`,
-        limit: 100
-      });
+      const keyInfos = await listKeyInfosWithPrefix(this.kv, `backup:${siteId}:`);
 
       const dates: string[] = [];
       let sizeEstimate = 0;
 
-      for (const key of list.keys) {
+      for (const key of keyInfos) {
         const keyParts = key.name.split(':');
         if (keyParts.length >= 4) {
           dates.push(keyParts[2]);
@@ -199,7 +191,7 @@ export class StorageManager {
       const uniqueDates = [...new Set(dates)].sort();
 
       return {
-        totalBackups: list.keys.length,
+        totalBackups: keyInfos.length,
         totalSizeEstimate: sizeEstimate,
         oldestBackup: uniqueDates[0] || null,
         newestBackup: uniqueDates[uniqueDates.length - 1] || null
@@ -217,21 +209,18 @@ export class StorageManager {
 
   async listAllUrls(siteId: string): Promise<string[]> {
     try {
-      const list = await this.kv.list({
-        prefix: `latest:${siteId}:`,
-        limit: 1000
-      });
+      const keys = await listKeysWithPrefix(this.kv, `latest:${siteId}:`);
 
       const urls: string[] = [];
 
-      for (const key of list.keys) {
-        const latestData = await this.kv.get(key.name);
+      for (const keyName of keys) {
+        const latestData = await this.kv.get(keyName);
         if (latestData) {
           try {
             const metadata = JSON.parse(latestData) as BackupMetadata;
             urls.push(metadata.url);
           } catch (error) {
-            console.error(`Failed to parse latest data for ${key.name}:`, error);
+            console.error(`Failed to parse latest data for ${keyName}:`, error);
           }
         }
       }

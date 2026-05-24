@@ -2,6 +2,7 @@ import { DetailedDiff, DiffGenerationOptions, DiffCacheEntry } from '../types/di
 import { BackupMetadata } from '../types/site';
 import { readBackupContent } from '../runtime/content-storage';
 import { ContentComparer } from './comparer';
+import { listKeysWithPrefix } from '../runtime/kv-helpers';
 
 export class DiffGenerator {
   private kv: KVNamespace;
@@ -329,11 +330,11 @@ export class DiffGenerator {
 
   async clearCache(siteId?: string): Promise<void> {
     try {
-      const list = await this.kv.list({ prefix: 'diff:' });
+      const keys = await listKeysWithPrefix(this.kv, 'diff:');
 
-      for (const key of list.keys) {
-        if (!siteId || key.name.includes(siteId)) {
-          await this.kv.delete(key.name);
+      for (const keyName of keys) {
+        if (!siteId || keyName.includes(siteId)) {
+          await this.kv.delete(keyName);
         }
       }
 
@@ -345,18 +346,18 @@ export class DiffGenerator {
 
   async getCacheStats(): Promise<{ totalEntries: number; totalSize: number }> {
     try {
-      const list = await this.kv.list({ prefix: 'diff:' });
+      const keys = await listKeysWithPrefix(this.kv, 'diff:');
 
       let totalSize = 0;
-      for (const key of list.keys) {
-        const value = await this.kv.get(key.name, 'text');
+      for (const keyName of keys) {
+        const value = await this.kv.get(keyName, 'text');
         if (value) {
           totalSize += value.length;
         }
       }
 
       return {
-        totalEntries: list.keys.length,
+        totalEntries: keys.length,
         totalSize
       };
     } catch (error) {
