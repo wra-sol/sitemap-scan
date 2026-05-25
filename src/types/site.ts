@@ -1,3 +1,5 @@
+export const MAX_SITE_BATCH_SIZE = 30;
+
 export interface SiteConfig {
   id: string;
   name: string;
@@ -7,6 +9,7 @@ export interface SiteConfig {
   retentionDays: number;
   schedule: string;
   slackWebhook?: string;
+  batchSize?: number;
   fetchOptions: {
     timeout: number;
     retries: number;

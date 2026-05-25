@@ -1,4 +1,4 @@
-import { SiteConfig } from '../types/site';
+import { SiteConfig, MAX_SITE_BATCH_SIZE } from '../types/site';
 
 export class SiteValidator {
   static validateId(id: string): boolean {
@@ -128,6 +128,12 @@ export class SiteValidator {
       errors.push(...thresholdValidation.errors);
     }
 
+    if (config.batchSize !== undefined) {
+      if (!Number.isInteger(config.batchSize) || config.batchSize < 1 || config.batchSize > MAX_SITE_BATCH_SIZE) {
+        errors.push(`batchSize must be an integer between 1 and ${MAX_SITE_BATCH_SIZE}`);
+      }
+    }
+
     if (config.slackWebhook) {
       try {
         const webhookUrl = new URL(config.slackWebhook);
@@ -160,7 +166,8 @@ export class SiteValidator {
       },
       ...(config.sitemapUrl && { sitemapUrl: config.sitemapUrl }),
       ...(config.urls && { urls: config.urls }),
-      ...(config.slackWebhook && { slackWebhook: config.slackWebhook })
+      ...(config.slackWebhook && { slackWebhook: config.slackWebhook }),
+      ...(config.batchSize !== undefined && { batchSize: config.batchSize })
     };
   }
 }

@@ -1,11 +1,11 @@
-import { SiteConfig, BackupResult, BackupMetadata } from '../types/site';
+import { SiteConfig, BackupResult, BackupMetadata, MAX_SITE_BATCH_SIZE } from '../types/site';
 import { FetchResult } from '../types/backup';
 import { ContentComparer } from '../diff/comparer';
 import { encodeBackupContent, readBackupContent } from '../runtime/content-storage';
 import { XMLParser } from 'fast-xml-parser';
 
 export interface BatchOptions {
-  batchSize?: number;      // Max URLs to process in this batch (default: 500, max recommended: 800)
+  batchSize?: number;      // Max URLs to process in this batch (default: 25, max: MAX_SITE_BATCH_SIZE)
   batchOffset?: number;    // Starting index for this batch
   continueFromLast?: boolean; // Continue from last saved progress
 }
@@ -97,7 +97,7 @@ export class BackupFetcher {
   // Plus detect changes needs additional KV reads
   // Testing showed 25 URLs works reliably; 30+ can hit limits
   private static readonly DEFAULT_BATCH_SIZE = 25;
-  private static readonly MAX_BATCH_SIZE = 30; // Proven safe limit
+  private static readonly MAX_BATCH_SIZE = MAX_SITE_BATCH_SIZE; // Proven safe limit
   private static readonly MAX_FETCH_REDIRECTS = 5;
 
   // Sitemap recursion guards to prevent cycles and runaway parsing

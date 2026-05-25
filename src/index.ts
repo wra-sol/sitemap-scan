@@ -9,7 +9,7 @@ import { SlackNotifier } from './slack/notifier';
 import { matchesCronExpression } from './scheduler/cron';
 import { toPublicSiteConfig } from './sites/public-config';
 import { SiteRegistry } from './sites/registry';
-import { SiteConfig, SiteBackupResult } from './types/site';
+import { SiteConfig, SiteBackupResult, MAX_SITE_BATCH_SIZE } from './types/site';
 import { DiffGenerator } from './diff/generator';
 import { readBackupContent } from './runtime/content-storage';
 import { executeSiteBackupRun } from './runtime/site-execution';
@@ -74,7 +74,7 @@ export default {
           const execution = await executeSiteBackupRun(env, site, {
             trigger: 'scheduled',
             continueFromLast: true,
-            batchSize: 500
+            batchSize: site.batchSize ?? MAX_SITE_BATCH_SIZE
           });
 
           if (execution.runRecord.status === 'failed' || execution.runRecord.status === 'partial') {
@@ -322,7 +322,7 @@ async function handlePostRequest(
 
       const execution = await executeSiteBackupRun(env, siteConfig, {
         trigger: 'manual',
-        batchSize: triggerBody.batchSize,
+        batchSize: triggerBody.batchSize ?? siteConfig.batchSize,
         batchOffset: triggerBody.batchOffset,
         continueFromLast: triggerBody.continueFromLast ?? true
       });
