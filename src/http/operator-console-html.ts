@@ -145,7 +145,7 @@ export const OPERATOR_CONSOLE_HTML = `<!DOCTYPE html>
               <button id="resetBackupBtn">Reset Progress</button>
               <button id="openExplorerBtn">Open Explorer</button>
             </div>
-            <div class="muted small" id="editorHint">The editor accepts the same JSON shape as the API. Sensitive webhook values are omitted when loading existing sites.</div>
+            <div class="muted small" id="editorHint">The editor accepts the same JSON shape as the API. batchSize controls how many URLs are processed per run (1–30). Sensitive webhook values are omitted when loading existing sites.</div>
           </div>
         </section>
 
@@ -383,6 +383,7 @@ export const OPERATOR_CONSOLE_HTML = `<!DOCTYPE html>
           sitemapUrl: 'https://example.com/sitemap.xml',
           retentionDays: 7,
           schedule: '0 2 * * *',
+          batchSize: 25,
           fetchOptions: { timeout: 10000, retries: 3, concurrency: 5 },
           changeThreshold: { minChangeSize: 0, ignorePatterns: [] }
         }, null, 2);
