@@ -18,13 +18,13 @@
     "@typescript-eslint/eslint-plugin": "^8.59.2",
     "@typescript-eslint/parser": "^8.59.2",
     "eslint": "^10.3.0",
-    "fast-xml-parser": "^5.7.3",
     "globals": "^17.6.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5",
     "wrangler": "^4.90.0"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.7.3",
     "html-minifier-terser": "^7.2.0"
   }
 }
