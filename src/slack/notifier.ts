@@ -699,13 +699,13 @@ export class SlackNotifier {
         ]
       };
 
-      const response = await fetch(targetWebhook, {
+      const response = await this.retryFetch(targetWebhook, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(message)
-      });
+      }, { maxRetries: 3, baseDelay: 1000 });
 
       if (!response.ok) {
         const errorText = await response.text();
