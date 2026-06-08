@@ -37,7 +37,10 @@ export class SlackNotifier {
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        const response = await fetch(url, init);
+        const response = await fetch(url, {
+          ...init,
+          signal: init?.signal ?? AbortSignal.timeout(10000)
+        });
         return response;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -727,6 +730,7 @@ export class SlackNotifier {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: AbortSignal.timeout(10000),
         body: JSON.stringify({
           username: 'Webhook Validation',
           text: 'Validating webhook configuration'
