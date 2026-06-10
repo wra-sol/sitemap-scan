@@ -217,7 +217,8 @@ export const BACKUP_VIEWER_HTML = `<!DOCTYPE html>
 
     async function fetchJson(path) {
       const response = await fetch(baseUrl + path, {
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        signal: AbortSignal.timeout(30000)
       });
 
       if (response.status === 401 || response.status === 503) {
@@ -511,7 +512,8 @@ export const BACKUP_VIEWER_HTML = `<!DOCTYPE html>
     async function loadRenderedPreview(siteId, date, urlHash) {
       const previewUrl = '/api/sites/' + siteId + '/preview/' + date + '/' + urlHash;
       const response = await fetch(baseUrl + previewUrl, {
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        signal: AbortSignal.timeout(60000)
       });
       if (!response.ok) throw new Error('Failed to load preview');
       document.getElementById('previewFrame').srcdoc = await response.text();
@@ -522,7 +524,8 @@ export const BACKUP_VIEWER_HTML = `<!DOCTYPE html>
     async function loadSourceView(siteId, date, urlHash) {
       try {
         const response = await fetch(baseUrl + '/api/sites/' + siteId + '/backup/' + date + '/' + urlHash + '/source', {
-          headers: getAuthHeaders()
+          headers: getAuthHeaders(),
+          signal: AbortSignal.timeout(60000)
         });
         if (!response.ok) throw new Error('Failed to load source');
         const source = await response.text();

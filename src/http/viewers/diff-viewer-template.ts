@@ -254,7 +254,8 @@ export const DIFF_VIEWER_HTML = `<!DOCTYPE html>
 
     async function fetchJson(path) {
       const response = await fetch(baseUrl + path, {
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        signal: AbortSignal.timeout(30000)
       });
 
       if (response.status === 401 || response.status === 503) {
@@ -878,7 +879,8 @@ export const DIFF_VIEWER_HTML = `<!DOCTYPE html>
 
       const previewUrl = baseUrl + '/api/sites/' + encodeURIComponent(siteId) + '/preview/' + encodeURIComponent(previewDate) + '/' + encodeURIComponent(currentPreviewHash);
       fetch(previewUrl, {
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        signal: AbortSignal.timeout(60000)
       })
         .then(function(response) {
           if (!response.ok) {

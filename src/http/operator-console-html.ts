@@ -216,7 +216,8 @@ export const OPERATOR_CONSOLE_HTML = `<!DOCTYPE html>
 
     async function fetchJson(path, options) {
       const response = await fetch(baseUrl + path, Object.assign({
-        headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders())
+        headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders()),
+        signal: AbortSignal.timeout(30000)
       }, options || {}));
 
       if (response.status === 401 || response.status === 503) {
