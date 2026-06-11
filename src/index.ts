@@ -213,7 +213,7 @@ async function handleGetRequest(
       if (!siteId) {
         return new Response('siteId parameter required', { status: 400 });
       }
-      const days = parseInt(url.searchParams.get('days') || '7');
+      const days = parseInt(url.searchParams.get('days') || '7', 10);
       const metrics = await siteRegistry.getSiteMetrics(siteId, days);
       return jsonResponse(metrics);
     }
@@ -708,7 +708,7 @@ async function handleListBackedUpUrls(siteId: string, requestUrl: URL, kv: KVNam
   try {
     // Parse query parameters
     const cursor = requestUrl.searchParams.get('cursor') || undefined;
-    const limit = Math.min(parseInt(requestUrl.searchParams.get('limit') || '100'), 500);
+    const limit = Math.min(parseInt(requestUrl.searchParams.get('limit') || '100', 10), 500);
     const search = requestUrl.searchParams.get('search')?.toLowerCase() || '';
     const sort = requestUrl.searchParams.get('sort') || 'url'; // url, date, size, status
     const order = requestUrl.searchParams.get('order') || 'asc'; // asc, desc
@@ -791,7 +791,7 @@ async function handleListBackedUpUrls(siteId: string, requestUrl: URL, kv: KVNam
     // Apply cursor-based pagination
     let startIndex = 0;
     if (cursor) {
-      const cursorIndex = parseInt(cursor);
+      const cursorIndex = parseInt(cursor, 10);
       if (!isNaN(cursorIndex)) {
         startIndex = cursorIndex;
       }

@@ -357,8 +357,8 @@ export const BACKUP_VIEWER_HTML = `<!DOCTYPE html>
         
         document.getElementById('urlCount').textContent = totalUrls.toLocaleString() + ' total URL' + (totalUrls !== 1 ? 's' : '');
         
-        const startNum = parseInt(currentCursor) + 1;
-        const endNum = Math.min(parseInt(currentCursor) + currentUrls.length, totalUrls);
+        const startNum = parseInt(currentCursor, 10) + 1;
+        const endNum = Math.min(parseInt(currentCursor, 10) + currentUrls.length, totalUrls);
         document.getElementById('showingCount').textContent = 'Showing ' + startNum + '-' + endNum;
         
         renderUrlList(currentUrls);
