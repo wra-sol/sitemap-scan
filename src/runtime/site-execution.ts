@@ -64,21 +64,28 @@ function mapRunStatus(result: SiteBackupResult, hasMore: boolean): SiteRunStatus
   return 'success';
 }
 
+interface ExecutionDeps {
+  runStore?: RunStore;
+  fetcher?: BackupFetcher;
+  slackNotifier?: SlackNotifier;
+}
+
 export async function executeSiteBackupRun(
   env: ExecutionEnv,
   siteConfig: SiteConfig,
-  options: ExecuteSiteBackupRunOptions
+  options: ExecuteSiteBackupRunOptions,
+  deps?: ExecutionDeps
 ): Promise<ExecuteSiteBackupRunResult> {
-  const runStore = new RunStore(env.BACKUP_KV);
+  const runStore = deps?.runStore ?? new RunStore(env.BACKUP_KV);
   const cacheTtlSeconds = env.CLOUDFLARE_SCRAPE_CACHE_TTL
     ? Number.parseInt(env.CLOUDFLARE_SCRAPE_CACHE_TTL, 10)
     : undefined;
-  const fetcher = new BackupFetcher(env.BACKUP_KV, {
+  const fetcher = deps?.fetcher ?? new BackupFetcher(env.BACKUP_KV, {
     accountId: env.CLOUDFLARE_ACCOUNT_ID,
     apiToken: env.CLOUDFLARE_SCRAPE_API_TOKEN,
     cacheTtlSeconds: Number.isFinite(cacheTtlSeconds) ? cacheTtlSeconds : undefined
   });
-  const slackNotifier = new SlackNotifier(env.BACKUP_KV, env.DEFAULT_SLACK_WEBHOOK, env.PUBLIC_BASE_URL);
+  const slackNotifier = deps?.slackNotifier ?? new SlackNotifier(env.BACKUP_KV, env.DEFAULT_SLACK_WEBHOOK, env.PUBLIC_BASE_URL);
   const runRecord = await runStore.startRun(siteConfig, options.trigger);
 
   try {
