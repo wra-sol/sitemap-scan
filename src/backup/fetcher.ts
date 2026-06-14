@@ -841,6 +841,20 @@ export class BackupFetcher {
       urls = [siteConfig.baseUrl];
     }
 
+    // Deduplicate URLs before processing to avoid redundant backups
+    const seen = new Set<string>();
+    const uniqueUrls: string[] = [];
+    for (const url of urls) {
+      if (!seen.has(url)) {
+        seen.add(url);
+        uniqueUrls.push(url);
+      }
+    }
+    if (uniqueUrls.length < urls.length) {
+      console.log(`Deduplicated ${urls.length - uniqueUrls.length} duplicate URLs for ${siteConfig.name}`);
+    }
+    urls = uniqueUrls;
+
     // Apply exclusion patterns (default: exclude common i18n paths)
     const excludePatterns = siteConfig.excludePatterns ?? [
       '^.*/fr/.*$',   // French
