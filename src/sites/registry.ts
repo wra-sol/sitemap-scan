@@ -37,7 +37,13 @@ export class SiteRegistry {
       return { healthy: false, issues: ['Site configuration not found'] };
     }
 
-    const siteConfig: SiteConfig = JSON.parse(config);
+    let siteConfig: SiteConfig;
+    try {
+      siteConfig = JSON.parse(config);
+    } catch (error) {
+      return { healthy: false, issues: [`Invalid site configuration JSON: ${error}`] };
+    }
+
     const issues: string[] = [];
 
     try {
