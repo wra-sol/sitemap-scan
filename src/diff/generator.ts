@@ -2,6 +2,7 @@ import { DetailedDiff, DiffGenerationOptions, DiffCacheEntry } from '../types/di
 import { BackupMetadata } from '../types/site';
 import { readBackupContent } from '../runtime/content-storage';
 import { ContentComparer } from './comparer';
+import { getUrlHash } from '../utils/hash';
 import { listKeysWithPrefix } from '../runtime/kv-helpers';
 
 export class DiffGenerator {
@@ -137,32 +138,52 @@ export class DiffGenerator {
     url: string,
     maxDays: number = 30
   ): Promise<Array<{ date: string; hash: string; hasChanges: boolean }>> {
-    const history: Array<{ date: string; hash: string; hasChanges: boolean }> = [];
-    const urlHash = await this.getUrlHash(url);
+    const urlHash = await getUrlHash(url);
 
+    // Generate all dates upfront
     const today = new Date();
+    const dateInfos: Array<{ dateStr: string; metadataKey: string }> = [];
     for (let i = 0; i < maxDays; i++) {
       const date = new Date(today);
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
+      dateInfos.push({
+        dateStr,
+        metadataKey: this.getMetadataKey(siteId, dateStr, urlHash)
+      });
+    }
 
-      const metadataKey = this.getMetadataKey(siteId, dateStr, urlHash);
-      const stored = await this.kv.get(metadataKey, 'text');
+    // Fetch all metadata in parallel
+    const results = await Promise.all(
+      dateInfos.map(info =>
+        this.kv.get(info.metadataKey, 'text')
+          .then(stored => ({ info, stored }))
+          .catch(error => {
+            console.error(`Failed to fetch backup data for ${info.dateStr}:`, error);
+            return { info, stored: null };
+          })
+      )
+    );
 
+    // Build history in date order (oldest first for hasChanges calculation)
+    const history: Array<{ date: string; hash: string; hasChanges: boolean }> = [];
+    for (const { info, stored } of results) {
       if (stored) {
         try {
           const data = JSON.parse(stored);
           history.push({
-            date: dateStr,
+            date: info.dateStr,
             hash: data.hash,
             hasChanges: false
           });
         } catch (error) {
-          console.error(`Failed to parse backup data for ${dateStr}:`, error);
+          console.error(`Failed to parse backup data for ${info.dateStr}:`, error);
         }
       }
     }
 
+    // Calculate hasChanges by comparing consecutive entries (oldest to newest)
+    // history is in chronological order (oldest first)
     for (let i = 1; i < history.length; i++) {
       if (history[i].hash !== history[i - 1].hash) {
         history[i].hasChanges = true;
@@ -178,7 +199,7 @@ export class DiffGenerator {
     date2: string,
     url: string
   ): Promise<DetailedDiff | null> {
-    const urlHash = await this.getUrlHash(url);
+    const urlHash = await getUrlHash(url);
     const metadataKey1 = this.getMetadataKey(siteId, date1, urlHash);
     const metadataKey2 = this.getMetadataKey(siteId, date2, urlHash);
 
@@ -272,17 +293,12 @@ export class DiffGenerator {
   }
 
   private async getCacheKey(siteId: string, date: string, url: string): Promise<string> {
-    const urlHash = await this.getUrlHash(url);
+    const urlHash = await getUrlHash(url);
     return `diff:${siteId}:${date}:${urlHash}`;
   }
 
   private getMetadataKey(siteId: string, date: string, urlHash: string): string {
     return `meta:${siteId}:${date}:${urlHash}`;
-  }
-
-  private async getUrlHash(url: string): Promise<string> {
-    const fullHash = await ContentComparer.calculateHash(url);
-    return fullHash.substring(0, 16);
   }
 
   private async getCachedDiff(cacheKey: string): Promise<DetailedDiff | null> {
