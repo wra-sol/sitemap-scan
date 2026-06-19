@@ -2,6 +2,7 @@ import { SiteConfig, BackupResult, BackupMetadata, MAX_SITE_BATCH_SIZE } from '.
 import { FetchResult } from '../types/backup';
 import { ContentComparer } from '../diff/comparer';
 import { encodeBackupContent, readBackupContent } from '../runtime/content-storage';
+import { getUrlHash } from '../utils/hash';
 import { XMLParser } from 'fast-xml-parser';
 
 export interface BatchOptions {
@@ -1390,7 +1391,7 @@ export class BackupFetcher {
     );
 
     return Promise.all(successfulResults.map(async (result) => {
-      const urlHash = await this.getUrlHash(result.url);
+      const urlHash = await getUrlHash(result.url);
       const previousLatest = await this.kv.get(`latest:${siteId}:${urlHash}`);
       const previousContent = await this.loadPreviousContent(siteId, urlHash, previousLatest);
 
@@ -1599,13 +1600,5 @@ export class BackupFetcher {
     } catch (error) {
       console.error(`Failed to cleanup old backups for ${siteId}:`, error);
     }
-  }
-
-  private async getUrlHash(url: string): Promise<string> {
-    const buffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(url));
-    return Array.from(new Uint8Array(buffer))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('')
-      .substring(0, 16);
   }
 }

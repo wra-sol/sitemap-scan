@@ -1,6 +1,7 @@
 import { readBackupContent } from '../runtime/content-storage';
 import { SiteConfig, SiteBackupResult } from '../types/site';
 import { ContentComparer } from '../diff/comparer';
+import { getUrlHash } from '../utils/hash';
 import { ContentChange, StyleChange, StructureChange } from '../types/diff';
 
 export interface SlackDeliveryResult {
@@ -444,7 +445,7 @@ export class SlackNotifier {
     currentContent: string,
     currentHash: string
   ): Promise<string> {
-    const urlHash = await this.getUrlHash(url);
+    const urlHash = await getUrlHash(url);
     const prevLatestKey = `prev_latest:${siteId}:${urlHash}`;
     const prevMetaRaw = await this.kv.get(prevLatestKey);
 
@@ -506,14 +507,6 @@ export class SlackNotifier {
     }
 
     return parts.join('\n');
-  }
-
-  private async getUrlHash(url: string): Promise<string> {
-    const buffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(url));
-    return Array.from(new Uint8Array(buffer))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('')
-      .substring(0, 16);
   }
 
   private buildErrorMessage(

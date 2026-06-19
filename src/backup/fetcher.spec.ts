@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { BackupFetcher } from './fetcher';
+import { getUrlHash } from '../utils/hash';
 import type { SiteConfig } from '../types/site';
 
 function createMockKV(initial: Record<string, string> = {}): KVNamespace {
@@ -579,7 +580,6 @@ ${urls2.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
     it('reuses latest metadata lookups for change detection and storage', async () => {
       const kv = createMockKV();
       const fetcher = new BackupFetcher(kv);
-      const getUrlHash = (fetcher as unknown as Record<string, (...args: unknown[]) => unknown>).getUrlHash.bind(fetcher);
       const page1 = 'https://example.com/page1';
       const page2 = 'https://example.com/page2';
       const page1Hash = await getUrlHash(page1);

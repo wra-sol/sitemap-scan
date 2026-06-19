@@ -1,5 +1,6 @@
 import { BackupMetadata } from '../types/site';
 import { decodeBackupContent, encodeBackupContent } from '../runtime/content-storage';
+import { getUrlHash } from '../utils/hash';
 import { listKeysWithPrefix, listKeyInfosWithPrefix } from '../runtime/kv-helpers';
 
 export class StorageManager {
@@ -233,10 +234,7 @@ export class StorageManager {
   }
 
   async getUrlHash(url: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(url);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
+    const hash = await getUrlHash(url);
+    return hash;
   }
 }
