@@ -44,12 +44,27 @@ export class SiteRegistry {
       return { healthy: false, issues: [`Invalid site configuration JSON: ${error}`] };
     }
 
-    const issues: string[] = [];
+    // Run health checks in parallel so all issues are reported at once
+    const results = await Promise.allSettled([
+      this.checkBaseUrlHealth(siteConfig.baseUrl),
+      siteConfig.sitemapUrl ? this.checkSitemapHealth(siteConfig.sitemapUrl) : Promise.resolve([]),
+    ]);
 
+    const issues: string[] = [];
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        issues.push(...result.value);
+      }
+    }
+
+    return { healthy: issues.length === 0, issues };
+  }
+
+  private async checkBaseUrlHealth(baseUrl: string): Promise<string[]> {
+    const issues: string[] = [];
     try {
-      const baseUrl = new URL(siteConfig.baseUrl);
-      const testUrl = `${baseUrl.protocol}//${baseUrl.host}`;
-      
+      const parsed = new URL(baseUrl);
+      const testUrl = `${parsed.protocol}//${parsed.host}`;
       const response = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
       if (!response.ok) {
         issues.push(`Base URL health check failed: ${response.status}`);
@@ -57,22 +72,23 @@ export class SiteRegistry {
     } catch (error) {
       issues.push(`Base URL health check error: ${error}`);
     }
+    return issues;
+  }
 
-    if (siteConfig.sitemapUrl) {
-      try {
-        const sitemapResponse = await fetch(siteConfig.sitemapUrl, { 
-          method: 'GET', 
-          signal: AbortSignal.timeout(5000) 
-        });
-        if (!sitemapResponse.ok) {
-          issues.push(`Sitemap health check failed: ${sitemapResponse.status}`);
-        }
-      } catch (error) {
-        issues.push(`Sitemap health check error: ${error}`);
+  private async checkSitemapHealth(sitemapUrl: string): Promise<string[]> {
+    const issues: string[] = [];
+    try {
+      const sitemapResponse = await fetch(sitemapUrl, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000)
+      });
+      if (!sitemapResponse.ok) {
+        issues.push(`Sitemap health check failed: ${sitemapResponse.status}`);
       }
+    } catch (error) {
+      issues.push(`Sitemap health check error: ${error}`);
     }
-
-    return { healthy: issues.length === 0, issues };
+    return issues;
   }
 
   async getSiteMetrics(siteId: string, days: number = 7): Promise<{ totalBackups: number; successfulBackups: number; failedBackups: number; averageExecutionTime: number; recentErrors: string[] }> {
