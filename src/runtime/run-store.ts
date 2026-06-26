@@ -115,8 +115,11 @@ export class RunStore {
   async listRecentRuns(limit: number = 25, siteId?: string): Promise<SiteRunRecord[]> {
     const prefix = siteId ? `run_site:${siteId}:` : 'run_log:';
     let cursor: string | undefined;
-    const records: SiteRunRecord[] = [];
+    const allKeys: string[] = [];
 
+    // Phase 1 — collect key names only (no KV value reads during listing).
+    // KV list returns keys in lexicographic order; since run keys embed an
+    // ISO timestamp, ascending lexicographic order equals chronological order.
     do {
       const list = await this.kv.list({
         prefix,
@@ -124,25 +127,32 @@ export class RunStore {
         cursor
       }) as KVListResult;
 
-      for (const key of list.keys) {
-        const raw = await this.kv.get(key.name, 'text');
-        if (!raw) {
-          continue;
-        }
+      allKeys.push(...list.keys.map((key) => key.name));
+      cursor = list.list_complete ? undefined : list.cursor;
+    } while (cursor);
 
-        try {
-          records.push(JSON.parse(raw) as SiteRunRecord);
-        } catch (error) {
-          console.error(`Failed to parse run record ${key.name}:`, error);
-        }
+    // Phase 2 — sort descending (newest first) and keep only the top `limit`
+    // keys. Sorting key strings is far cheaper than fetching values from KV.
+    const targetKeys = allKeys
+      .sort((left, right) => right.localeCompare(left))
+      .slice(0, limit);
+
+    // Phase 3 — fetch values only for the keys we will actually return.
+    const records: SiteRunRecord[] = [];
+    for (const key of targetKeys) {
+      const raw = await this.kv.get(key, 'text');
+      if (!raw) {
+        continue;
       }
 
-      cursor = list.list_complete ? undefined : list.cursor;
-    } while (cursor && records.length < limit * 3);
+      try {
+        records.push(JSON.parse(raw) as SiteRunRecord);
+      } catch (error) {
+        console.error(`Failed to parse run record ${key}:`, error);
+      }
+    }
 
-    return records
-      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
-      .slice(0, limit);
+    return records;
   }
 
   private async persistRecord(record: SiteRunRecord): Promise<void> {
