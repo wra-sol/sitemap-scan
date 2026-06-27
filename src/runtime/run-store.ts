@@ -138,9 +138,22 @@ export class RunStore {
       .slice(0, limit);
 
     // Phase 3 — fetch values only for the keys we will actually return.
+    // Fetches are parallelized so a 25-run listing issues all reads at once
+    // instead of round-tripping serially (KV latency is the dominant cost).
+    const settled = await Promise.all(
+      targetKeys.map((key) =>
+        this.kv
+          .get(key, 'text')
+          .then((raw) => ({ key, raw }))
+          .catch((error) => {
+            console.error(`Failed to fetch run record ${key}:`, error);
+            return { key, raw: null as string | null };
+          })
+      )
+    );
+
     const records: SiteRunRecord[] = [];
-    for (const key of targetKeys) {
-      const raw = await this.kv.get(key, 'text');
+    for (const { key, raw } of settled) {
       if (!raw) {
         continue;
       }
