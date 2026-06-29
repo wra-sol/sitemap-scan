@@ -375,26 +375,37 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
       structureChanges: number;
     }> = [];
 
+    // Fetch all metadata in parallel instead of sequential KV reads
     const urlRegex = new RegExp(`backup:${siteId}:${date}:([a-f0-9]+)`);
+    const urlHashes: string[] = [];
     for (const keyName of keys) {
       const urlMatch = keyName.match(urlRegex);
       if (urlMatch) {
-        const urlHash = urlMatch[1];
+        urlHashes.push(urlMatch[1]);
+      }
+    }
+
+    const metaResults = await Promise.all(
+      urlHashes.map(async (urlHash) => {
         const metaKey = `meta:${siteId}:${date}:${urlHash}`;
         const metaData = await kv.get(metaKey, 'text');
-        if (metaData) {
-          try {
-            const data = JSON.parse(metaData);
-            urls.push({
-              url: data.url,
-              urlHash,
-              contentChanges: 0,
-              styleChanges: 0,
-              structureChanges: 0
-            });
-          } catch (error) {
-            console.error('Failed to parse backup data:', error);
-          }
+        return { urlHash, metaData };
+      })
+    );
+
+    for (const { urlHash, metaData } of metaResults) {
+      if (metaData) {
+        try {
+          const data = JSON.parse(metaData);
+          urls.push({
+            url: data.url,
+            urlHash,
+            contentChanges: 0,
+            styleChanges: 0,
+            structureChanges: 0
+          });
+        } catch (error) {
+          console.error('Failed to parse backup data:', error);
         }
       }
     }
@@ -402,45 +413,47 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
     const diffGenerator = new DiffGenerator(kv);
     const previousDate = await getPreviousDate(siteId, date, kv);
 
-    for (const urlData of urls) {
-      if (previousDate) {
-        const prevKey = `meta:${siteId}:${previousDate}:${urlData.urlHash}`;
-        const prevMetaData = await kv.get(prevKey, 'text');
-
-        if (prevMetaData) {
+    if (previousDate) {
+      // Fetch all previous + current metadata in parallel, then generate diffs in parallel
+      await Promise.all(
+        urls.map(async (urlData) => {
           try {
+            const [prevMetaData, currMetaData] = await Promise.all([
+              kv.get(`meta:${siteId}:${previousDate}:${urlData.urlHash}`, 'text'),
+              kv.get(`meta:${siteId}:${date}:${urlData.urlHash}`, 'text')
+            ]);
+
+            if (!prevMetaData || !currMetaData) return;
+
             const prevData = JSON.parse(prevMetaData);
-            const currKey = `meta:${siteId}:${date}:${urlData.urlHash}`;
-            const currMetaData = await kv.get(currKey, 'text');
+            const currData = JSON.parse(currMetaData);
 
-            if (currMetaData) {
-              const currData = JSON.parse(currMetaData);
+            const [prevBackupContent, currBackupContent] = await Promise.all([
+              readBackupContent(kv, siteId, previousDate, urlData.urlHash, prevData),
+              readBackupContent(kv, siteId, date, urlData.urlHash, currData)
+            ]);
 
-              const prevBackupContent = await readBackupContent(kv, siteId, previousDate, urlData.urlHash, prevData);
-              const currBackupContent = await readBackupContent(kv, siteId, date, urlData.urlHash, currData);
+            if (prevBackupContent && currBackupContent) {
+              const diff = await diffGenerator.generateDiff(
+                siteId,
+                date,
+                urlData.url,
+                prevBackupContent,
+                currBackupContent,
+                prevData.hash,
+                currData.hash,
+                { includeContent: true, includeStyle: true, includeStructure: true }
+              );
 
-              if (prevBackupContent && currBackupContent) {
-                const diff = await diffGenerator.generateDiff(
-                  siteId,
-                  date,
-                  urlData.url,
-                  prevBackupContent,
-                  currBackupContent,
-                  prevData.hash,
-                  currData.hash,
-                  { includeContent: true, includeStyle: true, includeStructure: true }
-                );
-
-                urlData.contentChanges = diff.summary.contentChanges;
-                urlData.styleChanges = diff.summary.styleChanges;
-                urlData.structureChanges = diff.summary.structureChanges;
-              }
+              urlData.contentChanges = diff.summary.contentChanges;
+              urlData.styleChanges = diff.summary.styleChanges;
+              urlData.structureChanges = diff.summary.structureChanges;
             }
           } catch (error) {
             console.error('Failed to generate diff:', error);
           }
-        }
-      }
+        })
+      );
     }
 
     return jsonResponse({
