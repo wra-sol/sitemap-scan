@@ -1,11 +1,13 @@
 import { listKeysWithPrefix } from './kv-helpers';
 
 async function deleteKeys(kv: KVNamespace, keys: string[]): Promise<number> {
+  const CHUNK_SIZE = 50;
   let deleted = 0;
 
-  for (const key of keys) {
-    await kv.delete(key);
-    deleted++;
+  for (let i = 0; i < keys.length; i += CHUNK_SIZE) {
+    const chunk = keys.slice(i, i + CHUNK_SIZE);
+    await Promise.all(chunk.map((key) => kv.delete(key)));
+    deleted += chunk.length;
   }
 
   return deleted;
