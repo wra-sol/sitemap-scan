@@ -105,7 +105,7 @@ export async function handleGetRequest(
     case '/backup/viewer':
       return await serveBackupViewer();
 
-    default:
+    default: {
       if (path.startsWith('/api/sites/') && path.includes('/preview/')) {
         return await handlePreviewRequest(path, env.BACKUP_KV);
       }
@@ -115,25 +115,20 @@ export async function handleGetRequest(
       if (path.startsWith('/api/sites/') && path.includes('/diff/')) {
         return await handleDiffRequest(path, env.BACKUP_KV);
       }
-      if (path.match(/^\/api\/sites\/[^/]+\/urls$/)) {
-        const match = path.match(/^\/api\/sites\/([^/]+)\/urls$/);
-        if (match) {
-          return await handleListBackedUpUrls(match[1], url, env.BACKUP_KV);
-        }
+      const urlsMatch = /^\/api\/sites\/([^/]+)\/urls$/.exec(path);
+      if (urlsMatch) {
+        return await handleListBackedUpUrls(urlsMatch[1], url, env.BACKUP_KV);
       }
-      if (path.match(/^\/api\/sites\/[^/]+\/backup\/[^/]+\/history$/)) {
-        const match = path.match(/^\/api\/sites\/([^/]+)\/backup\/([^/]+)\/history$/);
-        if (match) {
-          return await handleBackupHistory(match[1], match[2], env.BACKUP_KV);
-        }
+      const historyMatch = /^\/api\/sites\/([^/]+)\/backup\/([^/]+)\/history$/.exec(path);
+      if (historyMatch) {
+        return await handleBackupHistory(historyMatch[1], historyMatch[2], env.BACKUP_KV);
       }
-      if (path.match(/^\/api\/sites\/[^/]+\/backup\/\d{4}-\d{2}-\d{2}\/[^/]+\/source$/)) {
-        const match = path.match(/^\/api\/sites\/([^/]+)\/backup\/(\d{4}-\d{2}-\d{2})\/([^/]+)\/source$/);
-        if (match) {
-          return await handleBackupSource(match[1], match[2], match[3], env.BACKUP_KV);
-        }
+      const sourceMatch = /^\/api\/sites\/([^/]+)\/backup\/(\d{4}-\d{2}-\d{2})\/([^/]+)\/source$/.exec(path);
+      if (sourceMatch) {
+        return await handleBackupSource(sourceMatch[1], sourceMatch[2], sourceMatch[3], env.BACKUP_KV);
       }
       return new Response('Not found', { status: 404 });
+    }
   }
 }
 
@@ -601,11 +596,12 @@ async function handleListBackedUpUrls(siteId: string, requestUrl: URL, kv: KVNam
         limit: 1000
       }) as KVNamespaceListResult<unknown, string>;
 
-      for (const key of listResult.keys) {
-        const urlHash = key.name.replace(`latest:${siteId}:`, '');
-        const latestData = await kv.get(key.name, 'text');
-
-        if (latestData) {
+      // Fetch all KV values in parallel for this page instead of sequentially
+      const pageEntries = await Promise.all(
+        listResult.keys.map(async (key) => {
+          const urlHash = key.name.replace(`latest:${siteId}:`, '');
+          const latestData = await kv.get(key.name, 'text');
+          if (!latestData) return null;
           try {
             const metadata = JSON.parse(latestData);
             const urlEntry = {
@@ -617,13 +613,20 @@ async function handleListBackedUpUrls(siteId: string, requestUrl: URL, kv: KVNam
               latestSize: metadata.size,
               contentType: metadata.contentType || 'text/html'
             };
-
             if (!search || urlEntry.url.toLowerCase().includes(search)) {
-              allUrls.push(urlEntry);
+              return urlEntry;
             }
+            return null;
           } catch (error) {
             console.error(`Failed to parse latest data for ${key.name}:`, error);
+            return null;
           }
+        })
+      );
+
+      for (const entry of pageEntries) {
+        if (entry) {
+          allUrls.push(entry);
         }
       }
 
@@ -688,27 +691,39 @@ async function handleBackupHistory(siteId: string, urlHash: string, kv: KVNamesp
       contentType: string;
     }> = [];
 
+    // Collect matching keys first, then fetch all metadata in parallel
+    const matchingKeys: Array<{ keyName: string; date: string }> = [];
     for (const keyName of keys) {
       const keyParts = keyName.split(':');
       if (keyParts.length >= 4 && keyParts[3] === urlHash) {
-        const date = keyParts[2];
-        const metaData = await kv.get(keyName, 'text');
+        matchingKeys.push({ keyName, date: keyParts[2] });
+      }
+    }
 
-        if (metaData) {
-          try {
-            const metadata = JSON.parse(metaData);
-            history.push({
-              date,
-              timestamp: metadata.timestamp,
-              status: metadata.status,
-              size: metadata.size,
-              hash: metadata.hash,
-              contentType: metadata.contentType || 'text/html'
-            });
-          } catch (error) {
-            console.error(`Failed to parse metadata for ${keyName}:`, error);
-          }
+    const historyEntries = await Promise.all(
+      matchingKeys.map(async ({ keyName, date }) => {
+        const metaData = await kv.get(keyName, 'text');
+        if (!metaData) return null;
+        try {
+          const metadata = JSON.parse(metaData);
+          return {
+            date,
+            timestamp: metadata.timestamp,
+            status: metadata.status,
+            size: metadata.size,
+            hash: metadata.hash,
+            contentType: metadata.contentType || 'text/html'
+          };
+        } catch (error) {
+          console.error(`Failed to parse metadata for ${keyName}:`, error);
+          return null;
         }
+      })
+    );
+
+    for (const entry of historyEntries) {
+      if (entry) {
+        history.push(entry);
       }
     }
 
