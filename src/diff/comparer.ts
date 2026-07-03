@@ -1,6 +1,5 @@
 import { DiffResult, DiffComparison } from '../types/backup';
 import { DetailedDiff, ChangeClassification, ContentChange, StyleChange, StructureChange } from '../types/diff';
-import { minify } from 'html-minifier-terser';
 
 export class ContentComparer {
   private static readonly IGNORE_PATTERNS = [
@@ -94,22 +93,7 @@ export class ContentComparer {
     let normalized = content;
 
     try {
-      normalized = await minify(normalized, {
-        collapseWhitespace: true,
-        removeComments: true,
-        removeRedundantAttributes: true,
-        removeScriptTypeAttributes: true,
-        removeStyleLinkTypeAttributes: true,
-        useShortDoctype: true,
-        removeEmptyAttributes: true,
-        sortAttributes: true,
-        sortClassName: false,
-        removeAttributeQuotes: false,
-        removeOptionalTags: false,
-        removeEmptyElements: false,
-        preserveLineBreaks: false,
-        maxLineLength: undefined
-      });
+      normalized = await this.lightweightMinify(normalized);
     } catch (error) {
       console.error('HTML minification failed:', error);
     }
@@ -919,6 +903,103 @@ export class ContentComparer {
     }
 
     return highest;
+  }
+
+  private static async lightweightMinify(html: string): Promise<string> {
+    let normalized = html;
+
+    // Remove HTML comments
+    normalized = normalized.replace(/<!--[\s\S]*?-->/g, '');
+
+    // Use short doctype
+    normalized = normalized.replace(/<!DOCTYPE[^>]*>/gi, '<!DOCTYPE html>');
+
+    // Process tags: sort attributes and remove redundant ones
+    let result = '';
+    let i = 0;
+    while (i < normalized.length) {
+      if (normalized[i] === '<') {
+        const tagEnd = this.findTagEnd(normalized, i);
+        if (tagEnd === -1) {
+          result += normalized.slice(i);
+          break;
+        }
+        const fullTag = normalized.slice(i, tagEnd + 1);
+        const match = fullTag.match(/^<([a-zA-Z][^\s>]*)((?:\s+[^>]*)?)\s*\/?>$/);
+        if (match) {
+          const tagName = match[1];
+          const attrs = match[2] || '';
+          if (attrs.trim()) {
+            const attrList = this.splitAttrs(attrs.trim());
+            const filtered = attrList.filter((attr: string) => {
+              if (/^[^=]+=["']\s*["']$/.test(attr)) return false;
+              if (/^type=["']text\/javascript["']$/i.test(attr)) return false;
+              if (/^type=["']text\/css["']$/i.test(attr)) return false;
+              return true;
+            });
+            filtered.sort((a: string, b: string) => {
+              const nameA = a.split('=')[0].trim().toLowerCase();
+              const nameB = b.split('=')[0].trim().toLowerCase();
+              return nameA.localeCompare(nameB);
+            });
+            const selfClosing = fullTag.endsWith('/>') ? ' /' : '';
+            result += `<${tagName}${filtered.length ? ' ' + filtered.join(' ') : ''}${selfClosing}>`;
+          } else {
+            result += fullTag;
+          }
+        } else {
+          result += fullTag;
+        }
+        i = tagEnd + 1;
+      } else {
+        result += normalized[i];
+        i++;
+      }
+    }
+
+    return result;
+  }
+
+  private static findTagEnd(html: string, start: number): number {
+    let inQuotes = false;
+    let quoteChar = '';
+    for (let i = start; i < html.length; i++) {
+      const char = html[i];
+      if (!inQuotes && (char === '"' || char === "'")) {
+        inQuotes = true;
+        quoteChar = char;
+      } else if (inQuotes && char === quoteChar) {
+        inQuotes = false;
+      } else if (!inQuotes && char === '>') {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private static splitAttrs(attrs: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    let quoteChar = '';
+    for (let i = 0; i < attrs.length; i++) {
+      const char = attrs[i];
+      if (!inQuotes && (char === '"' || char === "'")) {
+        inQuotes = true;
+        quoteChar = char;
+        current += char;
+      } else if (inQuotes && char === quoteChar) {
+        inQuotes = false;
+        current += char;
+      } else if (!inQuotes && /\s/.test(char)) {
+        if (current.trim()) result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    if (current.trim()) result.push(current.trim());
+    return result;
   }
 }
 
