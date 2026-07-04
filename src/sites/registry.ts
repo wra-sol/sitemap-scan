@@ -65,7 +65,7 @@ export class SiteRegistry {
     try {
       const parsed = new URL(baseUrl);
       const testUrl = `${parsed.protocol}//${parsed.host}`;
-      const response = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+      const response = await fetch(testUrl, { method: 'GET', signal: AbortSignal.timeout(5000) });
       if (!response.ok) {
         issues.push(`Base URL health check failed: ${response.status}`);
       }
