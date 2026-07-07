@@ -155,10 +155,13 @@ export class SiteRegistry {
     }
 
     const siteIds = JSON.parse(sitesList) as string[];
-    const results: { [siteId: string]: { healthy: boolean; issues: string[] } } = {};
+    const healthResults = await Promise.all(
+      siteIds.map(async (siteId) => ({ siteId, result: await this.validateSiteHealth(siteId) }))
+    );
 
-    for (const siteId of siteIds) {
-      results[siteId] = await this.validateSiteHealth(siteId);
+    const results: { [siteId: string]: { healthy: boolean; issues: string[] } } = {};
+    for (const { siteId, result } of healthResults) {
+      results[siteId] = result;
     }
 
     return results;

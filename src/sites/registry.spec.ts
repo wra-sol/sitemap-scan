@@ -114,6 +114,23 @@ describe('SiteRegistry', () => {
       vi.unstubAllGlobals();
       expect(results['site-a']!.healthy).toBe(true);
     });
+
+    it('validates multiple sites in parallel', async () => {
+      const kv = createMockKV({
+        'sites:list': JSON.stringify(['site-a', 'site-b', 'site-c']),
+        'site_config:site-a': JSON.stringify({ id: 'site-a', name: 'A', baseUrl: 'https://a.com' }),
+        'site_config:site-b': JSON.stringify({ id: 'site-b', name: 'B', baseUrl: 'https://b.com' }),
+        'site_config:site-c': JSON.stringify({ id: 'site-c', name: 'C', baseUrl: 'https://c.com' }),
+      });
+      vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(null, { status: 200 }))));
+      const registry = new SiteRegistry(kv);
+      const results = await registry.validateAllSites();
+      vi.unstubAllGlobals();
+      expect(Object.keys(results)).toHaveLength(3);
+      expect(results['site-a']!.healthy).toBe(true);
+      expect(results['site-b']!.healthy).toBe(true);
+      expect(results['site-c']!.healthy).toBe(true);
+    });
   });
 
   describe('cleanupOldStats', () => {
