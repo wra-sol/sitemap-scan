@@ -1230,7 +1230,7 @@ export class BackupFetcher {
   }
 
   private async performDirectFetch(url: string, options: SiteConfig['fetchOptions']): Promise<FetchResult> {
-    const startTime = Date.now();
+    const fetchStartTime = Date.now();
     let redirectCount = 0;
     let currentUrl = url;
 
@@ -1241,10 +1241,15 @@ export class BackupFetcher {
         clearTimeout(timeoutId);
       }
     };
+
+    const setFetchTimeout = () => {
+      clearMyTimeout();
+      const elapsed = Date.now() - fetchStartTime;
+      const remaining = Math.max(1, options.timeout - elapsed);
+      timeoutId = setTimeout(() => controller.abort(), remaining);
+    };
     
-    timeoutId = setTimeout(() => {
-      controller.abort();
-    }, options.timeout);
+    setFetchTimeout();
 
     try {
       const requestHeaders = {
@@ -1269,8 +1274,7 @@ export class BackupFetcher {
         currentUrl = new URL(location, currentUrl).href;
         redirectCount++;
 
-        clearMyTimeout();
-        timeoutId = setTimeout(() => controller.abort(), options.timeout);
+        setFetchTimeout();
 
         response = await fetch(currentUrl, {
           method: 'GET',
@@ -1290,7 +1294,7 @@ export class BackupFetcher {
       }
 
       const content = await response.text();
-      const fetchTime = Date.now() - startTime;
+      const fetchTime = Date.now() - fetchStartTime;
 
       clearMyTimeout();
 
