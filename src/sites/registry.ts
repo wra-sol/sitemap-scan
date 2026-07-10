@@ -111,33 +111,38 @@ export class SiteRegistry {
 
     const executionTimes: number[] = [];
 
-    for (const date of dates) {
-      const statsKey = `stats:${siteId}:${date}`;
-      const stats = await this.kv.get(statsKey);
-      
-      if (stats) {
-        try {
-          const parsedStats = JSON.parse(stats);
-          metrics.totalBackups++;
-          
-          if (parsedStats.failureCount === 0) {
-            metrics.successfulBackups++;
-          } else {
-            metrics.failedBackups++;
-          }
+    // Fetch all stats in parallel to reduce KV round-trips
+    const statsEntries = await Promise.all(
+      dates.map(async (date) => {
+        const statsKey = `stats:${siteId}:${date}`;
+        const stats = await this.kv.get(statsKey);
+        return { date, stats };
+      })
+    );
 
-          if (parsedStats.endTime && parsedStats.startTime) {
-            const startTime = new Date(parsedStats.startTime).getTime();
-            const endTime = new Date(parsedStats.endTime).getTime();
-            executionTimes.push(endTime - startTime);
-          }
+    for (const entry of statsEntries) {
+      if (!entry.stats) continue;
+      try {
+        const parsedStats = JSON.parse(entry.stats);
+        metrics.totalBackups++;
 
-          if (parsedStats.errors && parsedStats.errors.length > 0) {
-            metrics.recentErrors.push(...parsedStats.errors.slice(0, 3));
-          }
-        } catch (error) {
-          console.error(`Failed to parse stats for ${statsKey}:`, error);
+        if (parsedStats.failureCount === 0) {
+          metrics.successfulBackups++;
+        } else {
+          metrics.failedBackups++;
         }
+
+        if (parsedStats.endTime && parsedStats.startTime) {
+          const startTime = new Date(parsedStats.startTime).getTime();
+          const endTime = new Date(parsedStats.endTime).getTime();
+          executionTimes.push(endTime - startTime);
+        }
+
+        if (parsedStats.errors && parsedStats.errors.length > 0) {
+          metrics.recentErrors.push(...parsedStats.errors.slice(0, 3));
+        }
+      } catch (error) {
+        console.error(`Failed to parse stats for stats:${siteId}:${entry.date}:`, error);
       }
     }
 
