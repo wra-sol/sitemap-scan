@@ -128,7 +128,7 @@ export default {
           return await handlePutRequest(request, url, siteManager);
 
         case 'DELETE':
-          return await handleDeleteRequest(url, env.BACKUP_KV);
+          return await handleDeleteRequest(url, env.BACKUP_KV, siteManager);
 
         default:
           return new Response('Method not allowed', { status: 405 });

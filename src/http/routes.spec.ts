@@ -269,7 +269,7 @@ describe('handleDeleteRequest', () => {
       'latest:site-a:abc': JSON.stringify({ url: 'https://a.com', timestamp: '2026-01-01T00:00:00Z', status: 200, size: 100 }),
       'backup:site-a:2026-01-01:abc': 'content',
     });
-    const response = await handleDeleteRequest(new URL('http://localhost/api/sites?siteId=site-a'), kv);
+    const response = await handleDeleteRequest(new URL('http://localhost/api/sites?siteId=site-a'), kv, mockSiteManager(kv));
     expect(response.status).toBe(200);
     const body = await response.json() as { success: boolean; deletedKeys: number };
     expect(body.success).toBe(true);
@@ -278,7 +278,7 @@ describe('handleDeleteRequest', () => {
 
   it('returns 400 when siteId missing', async () => {
     const kv = createMockKV();
-    const response = await handleDeleteRequest(new URL('http://localhost/api/sites'), kv);
+    const response = await handleDeleteRequest(new URL('http://localhost/api/sites'), kv, mockSiteManager(kv));
     expect(response.status).toBe(400);
   });
 });

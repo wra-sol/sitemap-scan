@@ -257,7 +257,8 @@ export async function handlePutRequest(
 
 export async function handleDeleteRequest(
   url: URL,
-  kv: KVNamespace
+  kv: KVNamespace,
+  siteManager: SiteManager
 ): Promise<Response> {
   const siteId = url.searchParams.get('siteId');
 
@@ -267,6 +268,7 @@ export async function handleDeleteRequest(
 
   const siteDataService = new SiteDataService(kv);
   const deletedKeys = await siteDataService.deleteSiteData(siteId);
+  await siteManager.deleteSiteConfig(siteId);
   return jsonResponse({ success: true, deletedKeys });
 }
 
