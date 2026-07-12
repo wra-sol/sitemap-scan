@@ -1,5 +1,4 @@
 import { SiteConfig } from '../types/site';
-import { XMLParser } from 'fast-xml-parser';
 
 export class SiteRegistry {
   private kv: KVNamespace;
@@ -170,39 +169,6 @@ export class SiteRegistry {
     }
 
     return results;
-  }
-
-  async getSitemapUrlCount(sitemapUrl: string): Promise<number> {
-    try {
-      const response = await fetch(sitemapUrl, { 
-        signal: AbortSignal.timeout(10000) 
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Sitemap fetch failed: ${response.status}`);
-      }
-
-      const xmlText = await response.text();
-      const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_'
-      });
-
-      const result = parser.parse(xmlText);
-      
-      if (result.urlset && result.urlset.url) {
-        return Array.isArray(result.urlset.url) ? result.urlset.url.length : 1;
-      }
-      
-      if (result.sitemapindex && result.sitemapindex.sitemap) {
-        return Array.isArray(result.sitemapindex.sitemap) ? result.sitemapindex.sitemap.length : 1;
-      }
-
-      return 0;
-    } catch (error) {
-      console.error(`Failed to get sitemap URL count for ${sitemapUrl}:`, error);
-      return 0;
-    }
   }
 
   async cleanupOldStats(retentionDays: number = 30): Promise<number> {
