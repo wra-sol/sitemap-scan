@@ -302,19 +302,16 @@ export class ContentComparer {
       ignorePatterns?: string[];
     }>
   ): Promise<DiffResult[]> {
-    const results: DiffResult[] = [];
-    
-    for (const comparison of comparisons) {
-      const result = await this.compareContent(
-        comparison.url,
-        comparison.previousContent,
-        comparison.currentContent,
-        comparison.ignorePatterns
-      );
-      results.push(result);
-    }
-    
-    return results;
+    return Promise.all(
+      comparisons.map((comparison) =>
+        this.compareContent(
+          comparison.url,
+          comparison.previousContent,
+          comparison.currentContent,
+          comparison.ignorePatterns
+        )
+      )
+    );
   }
 
   static summarizeChanges(diffResults: DiffResult[]): {
