@@ -366,7 +366,8 @@ export class BackupFetcher {
     if (!data) return null;
     try {
       return JSON.parse(data);
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to parse batch progress: ${error}`);
       return null;
     }
   }
@@ -380,7 +381,8 @@ export class BackupFetcher {
     try {
       const raw = await this.kv.get(`sitemap_listener:${siteId}`);
       return raw === '1' || raw === 'true';
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to check sitemap listener state: ${error}`);
       return false;
     }
   }
@@ -388,8 +390,8 @@ export class BackupFetcher {
   private async enableSitemapListener(siteId: string): Promise<void> {
     try {
       await this.kv.put(`sitemap_listener:${siteId}`, '1');
-    } catch {
-      // ignore
+    } catch (error) {
+      console.warn(`Failed to enable sitemap listener: ${error}`);
     }
   }
 
@@ -429,7 +431,8 @@ export class BackupFetcher {
         updatedAt: meta.updatedAt,
         totalUrls: meta.totalUrls ?? urls.length
       };
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to load sitemap snapshot: ${error}`);
       return null;
     }
   }
@@ -474,7 +477,8 @@ export class BackupFetcher {
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return [];
       return parsed.filter((u) => typeof u === 'string');
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to load pending sitemap URLs: ${error}`);
       return [];
     }
   }
@@ -724,7 +728,8 @@ export class BackupFetcher {
         chunks.push(JSON.parse(chunkRaw) as string[]);
       }
       return chunks.flat();
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to load URL cache: ${error}`);
       return null;
     }
   }
@@ -899,7 +904,8 @@ export class BackupFetcher {
       const u = new URL(url);
       u.hash = '';
       return u.href;
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to canonicalize sitemap URL ${url}: ${error}`);
       return url;
     }
   }
@@ -930,7 +936,8 @@ export class BackupFetcher {
       u.search = normalized.toString();
 
       return u.href;
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to canonicalize URL for state ${url}: ${error}`);
       return url;
     }
   }
@@ -1122,8 +1129,8 @@ export class BackupFetcher {
         locCount,
         checkedAt: new Date().toISOString()
       }), { expirationTtl: 7 * 24 * 3600 });
-    } catch {
-      // ignore
+    } catch (error) {
+      console.warn(`Failed to record sitemap state: ${error}`);
     }
   }
 
@@ -1132,7 +1139,8 @@ export class BackupFetcher {
       const raw = await this.kv.get(`full_scan:${siteId}`);
       if (!raw) return null;
       return JSON.parse(raw);
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to load full scan state: ${error}`);
       return null;
     }
   }
@@ -1140,8 +1148,8 @@ export class BackupFetcher {
   private async setFullScanState(siteId: string, state: { date: string; completedAt: string; totalUrls: number }): Promise<void> {
     try {
       await this.kv.put(`full_scan:${siteId}`, JSON.stringify(state), { expirationTtl: 14 * 24 * 3600 });
-    } catch {
-      // ignore
+    } catch (error) {
+      console.warn(`Failed to save full scan state: ${error}`);
     }
   }
 
@@ -1531,7 +1539,8 @@ export class BackupFetcher {
         attributeNamePrefix: '@_'
       });
       return parser.parse(xmlText) as SitemapDocument;
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to parse sitemap XML: ${error}`);
       return null;
     }
   }
