@@ -283,21 +283,33 @@ async function buildSitesOverview(
   const fetcher = new BackupFetcher(kv, buildScrapeApiOptions(env));
 
   return Promise.all(sites.map(async (site) => {
-    const [health, metrics, latestRun, progress] = await Promise.all([
-      siteRegistry.validateSiteHealth(site.id),
-      siteRegistry.getSiteMetrics(site.id, 7),
-      runStore.getLatestRun(site.id),
-      fetcher.getBatchProgress(site.id)
-    ]);
+    try {
+      const [health, metrics, latestRun, progress] = await Promise.all([
+        siteRegistry.validateSiteHealth(site.id),
+        siteRegistry.getSiteMetrics(site.id, 7),
+        runStore.getLatestRun(site.id),
+        fetcher.getBatchProgress(site.id)
+      ]);
 
-    return {
-      ...toPublicSiteConfig(site),
-      health,
-      metrics,
-      latestRun,
-      progress,
-      latestSummary: latestRun?.summary || null
-    };
+      return {
+        ...toPublicSiteConfig(site),
+        health,
+        metrics,
+        latestRun,
+        progress,
+        latestSummary: latestRun?.summary || null
+      };
+    } catch (error) {
+      console.error(`Overview failed for site ${site.id}:`, error);
+      return {
+        ...toPublicSiteConfig(site),
+        health: { status: 'unknown', errors: ['Failed to load health data'] },
+        metrics: null,
+        latestRun: null,
+        progress: null,
+        latestSummary: null
+      };
+    }
   }));
 }
 
