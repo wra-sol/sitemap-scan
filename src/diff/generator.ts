@@ -80,12 +80,15 @@ export class DiffGenerator {
       diff.summary.structureChanges = 0;
     }
 
-    if (options.maxChanges && diff.summary.totalChanges > options.maxChanges) {
+    const wasProgressive = contentSize > DiffGenerator.PROGRESSIVE_LOAD_THRESHOLD && options.progressiveLoad;
+    const wasLimited = options.maxChanges && diff.summary.totalChanges > options.maxChanges;
+
+    if (wasLimited) {
       diff = this.limitChanges(diff, options.maxChanges);
     }
 
     diff.metadata.generationTime = Date.now() - startTime;
-    diff.metadata.isPartial = diff.summary.totalChanges > (options.maxChanges || Infinity);
+    diff.metadata.isPartial = wasProgressive || wasLimited;
 
     if (options.cacheEnabled) {
       await this.cacheDiff(cacheKey, diff);

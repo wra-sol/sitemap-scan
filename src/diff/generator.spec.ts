@@ -15,14 +15,28 @@ function createMockKV(initial: Record<string, string> = {}): KVNamespace {
       store.delete(key);
       return Promise.resolve();
     }),
-    list: vi.fn(() =>
+    list: vi.fn(({ prefix }: { prefix?: string }) =>
       Promise.resolve({
-        keys: [],
+        keys: Array.from(store.keys())
+          .filter((k) => !prefix || k.startsWith(prefix))
+          .map((name) => ({ name })),
         list_complete: true,
         cursor: undefined
       })
     )
   } as unknown as KVNamespace;
+}
+
+function mockDiffValue(): {
+  classification: { content: unknown[]; style: unknown[]; structure: unknown[] };
+  summary: { contentChanges: number; styleChanges: number; structureChanges: number; totalChanges: number };
+  metadata: { generationTime: number; isPartial: boolean };
+} {
+  return {
+    classification: { content: [], style: [], structure: [] },
+    summary: { contentChanges: 0, styleChanges: 0, structureChanges: 0, totalChanges: 0 },
+    metadata: { generationTime: 0, isPartial: false }
+  };
 }
 
 describe('DiffGenerator', () => {
@@ -112,5 +126,115 @@ describe('DiffGenerator', () => {
       expect.any(String),
       { expirationTtl: 3600 }
     );
+  });
+
+  it('generates batch diffs in chunks of 5', async () => {
+    const kv = createMockKV();
+    vi.spyOn(ContentComparer, 'classifyChanges').mockResolvedValue(mockDiffValue() as never);
+
+    const generator = new DiffGenerator(kv);
+    const comparisons = Array.from({ length: 7 }, (_, i) => ({
+      url: `https://example.com/page-${i}`,
+      previousContent: '<html>before</html>',
+      currentContent: '<html>after</html>',
+      previousHash: 'hash-a',
+      currentHash: 'hash-b'
+    }));
+
+    const result = await generator.generateBatchDiffs('test-site', '2026-03-05', comparisons);
+    expect(result.size).toBe(7);
+    expect(ContentComparer.classifyChanges).toHaveBeenCalledTimes(7);
+  });
+
+  it('clears all diff cache entries', async () => {
+    const kv = createMockKV({
+      'diff:test-site:2026-03-05:abc': JSON.stringify({ diff: {} }),
+      'diff:other-site:2026-03-05:def': JSON.stringify({ diff: {} })
+    });
+    const generator = new DiffGenerator(kv);
+    await generator.clearCache();
+    expect(kv.delete).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears diff cache entries for a specific site', async () => {
+    const kv = createMockKV({
+      'diff:test-site:2026-03-05:abc': JSON.stringify({ diff: {} }),
+      'diff:other-site:2026-03-05:def': JSON.stringify({ diff: {} })
+    });
+    const generator = new DiffGenerator(kv);
+    await generator.clearCache('test-site');
+    expect(kv.delete).toHaveBeenCalledTimes(1);
+    expect(kv.delete).toHaveBeenCalledWith('diff:test-site:2026-03-05:abc');
+  });
+
+  it('returns cache stats', async () => {
+    const kv = createMockKV({
+      'diff:test-site:2026-03-05:abc': JSON.stringify({ diff: {}, expiresAt: Date.now() + 3600000 }),
+      'diff:test-site:2026-03-06:def': JSON.stringify({ diff: {}, expiresAt: Date.now() + 3600000 })
+    });
+    const generator = new DiffGenerator(kv);
+    const stats = await generator.getCacheStats();
+    expect(stats.totalEntries).toBe(2);
+    expect(stats.totalSize).toBeGreaterThan(0);
+  });
+
+  it('returns zero stats when cache is empty', async () => {
+    const kv = createMockKV();
+    const generator = new DiffGenerator(kv);
+    const stats = await generator.getCacheStats();
+    expect(stats).toEqual({ totalEntries: 0, totalSize: 0 });
+  });
+
+  it('uses progressive load for large content', async () => {
+    const kv = createMockKV();
+    vi.spyOn(ContentComparer, 'classifyChanges').mockResolvedValue(mockDiffValue() as never);
+
+    const generator = new DiffGenerator(kv);
+    const largeContent = 'a'.repeat(150000);
+    const diff = await generator.generateDiff(
+      'test-site',
+      '2026-03-05',
+      'https://example.com/page',
+      largeContent,
+      largeContent,
+      'hash-a',
+      'hash-b',
+      { progressiveLoad: true, cacheEnabled: false }
+    );
+
+    expect(diff.metadata.isPartial).toBe(true);
+  });
+
+  it('limits changes when maxChanges is set', async () => {
+    const kv = createMockKV();
+    const diffValue = {
+      classification: {
+        content: [
+          { priority: 10, description: 'change-1' },
+          { priority: 5, description: 'change-2' },
+          { priority: 3, description: 'change-3' }
+        ],
+        style: [{ priority: 2, description: 'style-1' }],
+        structure: [{ priority: 1, description: 'struct-1' }]
+      },
+      summary: { contentChanges: 3, styleChanges: 1, structureChanges: 1, totalChanges: 5 },
+      metadata: { generationTime: 0, isPartial: false }
+    };
+    vi.spyOn(ContentComparer, 'classifyChanges').mockResolvedValue(diffValue as never);
+
+    const generator = new DiffGenerator(kv);
+    const diff = await generator.generateDiff(
+      'test-site',
+      '2026-03-05',
+      'https://example.com/page',
+      '<html>before</html>',
+      '<html>after</html>',
+      'hash-a',
+      'hash-b',
+      { maxChanges: 3, cacheEnabled: false }
+    );
+
+    expect(diff.summary.totalChanges).toBeLessThanOrEqual(3);
+    expect(diff.metadata.isPartial).toBe(true);
   });
 });
