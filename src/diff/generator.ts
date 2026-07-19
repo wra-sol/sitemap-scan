@@ -81,10 +81,11 @@ export class DiffGenerator {
     }
 
     const wasProgressive = contentSize > DiffGenerator.PROGRESSIVE_LOAD_THRESHOLD && options.progressiveLoad;
-    const wasLimited = options.maxChanges && diff.summary.totalChanges > options.maxChanges;
+    const maxChanges = options.maxChanges;
+    const wasLimited = maxChanges !== undefined && diff.summary.totalChanges > maxChanges;
 
-    if (wasLimited) {
-      diff = this.limitChanges(diff, options.maxChanges);
+    if (wasLimited && maxChanges !== undefined) {
+      diff = this.limitChanges(diff, maxChanges);
     }
 
     diff.metadata.generationTime = Date.now() - startTime;

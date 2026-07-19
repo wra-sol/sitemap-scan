@@ -76,9 +76,9 @@ export interface UrlHistoryEntry {
 }
 
 export interface DiffGenerationOptions {
-  includeContent: boolean;
-  includeStyle: boolean;
-  includeStructure: boolean;
+  includeContent?: boolean;
+  includeStyle?: boolean;
+  includeStructure?: boolean;
   maxChanges?: number;
   progressiveLoad?: boolean;
   cacheEnabled?: boolean;
