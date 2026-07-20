@@ -55,7 +55,7 @@ export async function handleGetRequest(
         const siteConfig = await siteManager.getSiteConfig(siteId);
         return siteConfig
           ? jsonResponse(url.searchParams.get('includeSecrets') === '1' ? siteConfig : toPublicSiteConfig(siteConfig))
-          : new Response('Site not found', { status: 404 });
+          : jsonResponse({ error: 'Site not found' }, 404);
       } else {
         const allSites = await siteManager.getAllSiteConfigs();
         return jsonResponse(allSites.map(toPublicSiteConfig));
@@ -78,7 +78,7 @@ export async function handleGetRequest(
 
     case '/api/sites/metrics': {
       if (!siteId) {
-        return new Response('siteId parameter required', { status: 400 });
+        return jsonResponse({ error: 'siteId parameter required' }, 400);
       }
       const days = parseInt(url.searchParams.get('days') || '7', 10);
       const metrics = await siteRegistry.getSiteMetrics(siteId, days);
@@ -87,7 +87,7 @@ export async function handleGetRequest(
 
     case '/api/sites/dates':
       if (!siteId) {
-        return new Response('siteId parameter required', { status: 400 });
+        return jsonResponse({ error: 'siteId parameter required' }, 400);
       }
       return await handleGetSiteDates(siteId, env.BACKUP_KV);
 
@@ -127,7 +127,7 @@ export async function handleGetRequest(
       if (sourceMatch) {
         return await handleBackupSource(sourceMatch[1], sourceMatch[2], sourceMatch[3], env.BACKUP_KV);
       }
-      return new Response('Not found', { status: 404 });
+      return jsonResponse({ error: 'Not found' }, 404);
     }
   }
 }
@@ -152,7 +152,7 @@ export async function handlePostRequest(
 
       const saved = await siteManager.saveSiteConfig(body);
       if (!saved) {
-        return new Response('Failed to save site configuration', { status: 500 });
+        return jsonResponse({ error: 'Failed to save site configuration' }, 500);
       }
 
       return jsonResponse({ success: true, siteId: body.id }, 201);
@@ -174,7 +174,7 @@ export async function handlePostRequest(
       const siteConfig = await siteManager.getSiteConfig(triggerBody.siteId);
 
       if (!siteConfig) {
-        return new Response('Site not found', { status: 404 });
+        return jsonResponse({ error: 'Site not found' }, 404);
       }
 
       const execution = await executeSiteBackupRun(env, siteConfig, {
@@ -214,7 +214,7 @@ export async function handlePostRequest(
       const resetBody = await request.json() as { siteId: string };
       const resetSiteConfig = await siteManager.getSiteConfig(resetBody.siteId);
       if (!resetSiteConfig) {
-        return new Response('Site not found', { status: 404 });
+        return jsonResponse({ error: 'Site not found' }, 404);
       }
       const resetFetcher = new BackupFetcher(env.BACKUP_KV, buildScrapeApiOptions(env));
       await resetFetcher.resetSiteProgress(resetBody.siteId);
@@ -222,7 +222,7 @@ export async function handlePostRequest(
     }
 
     default:
-      return new Response('Not found', { status: 404 });
+      return jsonResponse({ error: 'Not found' }, 404);
   }
 }
 
@@ -234,12 +234,12 @@ export async function handlePutRequest(
   const siteId = url.searchParams.get('siteId');
 
   if (!siteId) {
-    return new Response('siteId parameter required', { status: 400 });
+    return jsonResponse({ error: 'siteId parameter required' }, 400);
   }
 
   const existingSite = await siteManager.getSiteConfig(siteId);
   if (!existingSite) {
-    return new Response('Site not found', { status: 404 });
+    return jsonResponse({ error: 'Site not found' }, 404);
   }
 
   const body = await request.json() as SiteConfig;
@@ -252,7 +252,7 @@ export async function handlePutRequest(
   const saved = await siteManager.saveSiteConfig(body);
   return saved
     ? jsonResponse({ success: true })
-    : new Response('Failed to update site configuration', { status: 500 });
+    : jsonResponse({ error: 'Failed to update site configuration' }, 500);
 }
 
 export async function handleDeleteRequest(
@@ -263,7 +263,7 @@ export async function handleDeleteRequest(
   const siteId = url.searchParams.get('siteId');
 
   if (!siteId) {
-    return new Response('siteId parameter required', { status: 400 });
+    return jsonResponse({ error: 'siteId parameter required' }, 400);
   }
 
   const siteDataService = new SiteDataService(kv);
@@ -363,7 +363,7 @@ async function handleGetSiteDates(siteId: string, kv: KVNamespace): Promise<Resp
 async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Response> {
   const match = path.match(/\/api\/sites\/([^/]+)\/diff\/(\d{4}-\d{2}-\d{2})/);
   if (!match) {
-    return new Response('Invalid diff request', { status: 400 });
+    return jsonResponse({ error: 'Invalid diff request' }, 400);
   }
 
   const [, siteId, date] = match;
@@ -372,7 +372,7 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
     const siteManager = new SiteManager(kv);
     const siteConfig = await siteManager.getSiteConfig(siteId);
     if (!siteConfig) {
-      return new Response('Site not found', { status: 404 });
+      return jsonResponse({ error: 'Site not found' }, 404);
     }
 
     const keys = await listKeysWithPrefix(kv, `backup:${siteId}:${date}:`);
@@ -483,7 +483,7 @@ async function handleDiffRequest(path: string, kv: KVNamespace): Promise<Respons
 async function handleUrlHistoryRequest(path: string, kv: KVNamespace): Promise<Response> {
   const match = path.match(/\/api\/sites\/([^/]+)\/diff\/(\d{4}-\d{2}-\d{2})\/url\/([a-f0-9]+)/);
   if (!match) {
-    return new Response('Invalid URL history request', { status: 400 });
+    return jsonResponse({ error: 'Invalid URL history request' }, 400);
   }
 
   const [, siteId, date, urlHash] = match;
@@ -492,37 +492,38 @@ async function handleUrlHistoryRequest(path: string, kv: KVNamespace): Promise<R
     const siteManager = new SiteManager(kv);
     const siteConfig = await siteManager.getSiteConfig(siteId);
     if (!siteConfig) {
-      return new Response('Site not found', { status: 404 });
+      return jsonResponse({ error: 'Site not found' }, 404);
     }
 
     const metaKey = `meta:${siteId}:${date}:${urlHash}`;
     const currentMetaData = await kv.get(metaKey, 'text');
 
     if (!currentMetaData) {
-      return new Response('URL not found for this date', { status: 404 });
+      return jsonResponse({ error: 'URL not found for this date' }, 404);
     }
-
-    const currData = JSON.parse(currentMetaData);
 
     const previousDate = await getPreviousDate(siteId, date, kv);
+
     if (!previousDate) {
-      return new Response('No previous backup found', { status: 404 });
+      return jsonResponse({ error: 'No previous backup found' }, 404);
     }
 
-    const previousMetaKey = `meta:${siteId}:${previousDate}:${urlHash}`;
-    const previousMetaData = await kv.get(previousMetaKey, 'text');
+    const previousMetaData = await kv.get(`meta:${siteId}:${previousDate}:${urlHash}`, 'text');
 
     if (!previousMetaData) {
-      return new Response('Previous version not found', { status: 404 });
+      return jsonResponse({ error: 'Previous version not found' }, 404);
     }
 
     const prevData = JSON.parse(previousMetaData);
+    const currData = JSON.parse(currentMetaData);
 
-    const prevBackupContent = await readBackupContent(kv, siteId, previousDate, urlHash, prevData);
-    const currBackupContent = await readBackupContent(kv, siteId, date, urlHash, currData);
+    const [prevBackupContent, currBackupContent] = await Promise.all([
+      readBackupContent(kv, siteId, previousDate, urlHash, prevData),
+      readBackupContent(kv, siteId, date, urlHash, currData)
+    ]);
 
     if (!prevBackupContent || !currBackupContent) {
-      return new Response('Backup content not found', { status: 404 });
+      return jsonResponse({ error: 'Backup content not found' }, 404);
     }
 
     const diffGenerator = new DiffGenerator(kv);
@@ -557,7 +558,7 @@ async function handlePreviewRequest(path: string, kv: KVNamespace): Promise<Resp
   try {
     const match = path.match(/\/api\/sites\/([^/]+)\/preview\/([^/]+)\/([^/]+)/);
     if (!match) {
-      return new Response('Invalid preview path', { status: 400 });
+      return jsonResponse({ error: 'Invalid preview path' }, 400);
     }
 
     const [, siteId, date, urlHash] = match;
@@ -567,7 +568,7 @@ async function handlePreviewRequest(path: string, kv: KVNamespace): Promise<Resp
     const content = await readBackupContent(kv, siteId, date, urlHash, metadata);
 
     if (!content) {
-      return new Response('Backup not found', { status: 404 });
+      return jsonResponse({ error: 'Backup not found' }, 404);
     }
 
     return new Response(content, {
@@ -578,7 +579,7 @@ async function handlePreviewRequest(path: string, kv: KVNamespace): Promise<Resp
     });
   } catch (error) {
     console.error('Failed to handle preview request:', error);
-    return new Response('Failed to load preview', { status: 500 });
+    return jsonResponse({ error: 'Failed to load preview' }, 500);
   }
 }
 
@@ -758,7 +759,7 @@ async function handleBackupSource(siteId: string, date: string, urlHash: string,
     const content = await readBackupContent(kv, siteId, date, urlHash, metadata);
 
     if (!content) {
-      return new Response('Backup not found', { status: 404 });
+      return jsonResponse({ error: 'Backup not found' }, 404);
     }
 
     return new Response(content, {
@@ -768,7 +769,7 @@ async function handleBackupSource(siteId: string, date: string, urlHash: string,
     });
   } catch (error) {
     console.error('Failed to get backup source:', error);
-    return new Response('Failed to load backup source', { status: 500 });
+    return jsonResponse({ error: 'Failed to load backup source' }, 500);
   }
 }
 

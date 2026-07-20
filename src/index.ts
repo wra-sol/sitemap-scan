@@ -131,7 +131,7 @@ export default {
           return await handleDeleteRequest(url, env.BACKUP_KV, siteManager);
 
         default:
-          return new Response('Method not allowed', { status: 405 });
+          return jsonResponse({ error: 'Method not allowed' }, 405);
       }
     } catch (error) {
       console.error('API request failed:', error);
