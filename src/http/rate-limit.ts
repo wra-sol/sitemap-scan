@@ -67,7 +67,12 @@ export async function applyRateLimit(request: Request, env: RateLimitEnv): Promi
     return jsonResponse(
       { error: 'Too many requests', retryAfter: retryAfterSeconds },
       429,
-      { 'Retry-After': String(Math.max(1, retryAfterSeconds)) }
+      {
+        'Retry-After': String(Math.max(1, retryAfterSeconds)),
+        'X-RateLimit-Limit': String(maxRequests),
+        'X-RateLimit-Remaining': '0',
+        'X-RateLimit-Reset': String(Math.ceil((windowStart + windowMs) / 1000)),
+      }
     );
   }
 

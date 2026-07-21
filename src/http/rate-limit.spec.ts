@@ -139,7 +139,7 @@ describe('applyRateLimit', () => {
     expect(await applyRateLimit(req, env)).toBeNull();
   });
 
-  it('returns 429 with Retry-After header', async () => {
+  it('returns 429 with Retry-After and X-RateLimit headers', async () => {
     const { kv } = createMockKV();
     const env = createEnv(kv, { RATE_LIMIT_REQUESTS: '1', RATE_LIMIT_WINDOW_MS: '60000' });
 
@@ -151,6 +151,12 @@ describe('applyRateLimit', () => {
     const retryAfter = blocked?.headers.get('Retry-After');
     expect(retryAfter).toBeTruthy();
     expect(Number.parseInt(retryAfter!, 10)).toBeGreaterThan(0);
+
+    expect(blocked?.headers.get('X-RateLimit-Limit')).toBe('1');
+    expect(blocked?.headers.get('X-RateLimit-Remaining')).toBe('0');
+    const reset = blocked?.headers.get('X-RateLimit-Reset');
+    expect(reset).toBeTruthy();
+    expect(Number.parseInt(reset!, 10)).toBeGreaterThan(0);
   });
 
   it('skips rate limiting when env variables are invalid', async () => {
