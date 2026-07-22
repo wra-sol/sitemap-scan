@@ -6,8 +6,16 @@ async function deleteKeys(kv: KVNamespace, keys: string[]): Promise<number> {
 
   for (let i = 0; i < keys.length; i += CHUNK_SIZE) {
     const chunk = keys.slice(i, i + CHUNK_SIZE);
-    await Promise.all(chunk.map((key) => kv.delete(key)));
-    deleted += chunk.length;
+    const results = await Promise.allSettled(
+      chunk.map((key) => kv.delete(key))
+    );
+    for (let j = 0; j < results.length; j++) {
+      if (results[j]!.status === 'fulfilled') {
+        deleted++;
+      } else {
+        console.warn(`Failed to delete KV key ${chunk[j]}:`, results[j]);
+      }
+    }
   }
 
   return deleted;
