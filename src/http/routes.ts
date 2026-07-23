@@ -150,6 +150,15 @@ export async function handlePostRequest(
         return jsonResponse({ error: 'Invalid configuration', details: validationResult.errors }, 400);
       }
 
+      // Prevent silent overwrites: POST is for creation, PUT is for updates
+      const existing = await siteManager.getSiteConfig(body.id);
+      if (existing) {
+        return jsonResponse(
+          { error: 'Site already exists', siteId: body.id, message: 'Use PUT /api/sites?siteId=... to update' },
+          409
+        );
+      }
+
       const saved = await siteManager.saveSiteConfig(body);
       if (!saved) {
         return jsonResponse({ error: 'Failed to save site configuration' }, 500);
